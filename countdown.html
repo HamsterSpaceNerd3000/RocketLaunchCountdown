@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {
+    margin: 0;
+    background-color: black;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+#mission {
+    color: white;
+    font-family: Consolas, monospace;
+    font-size: 4vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 90vw;
+    text-align: center;
+}
+#timer {
+    color: white;
+    font-family: Consolas, monospace;
+    font-size: 8vw;
+    line-height: 1;
+    white-space: nowrap;
+    text-align: center;
+}
+</style>
+<script>
+setTimeout(() => location.reload(), 1000);
+</script>
+</head>
+<body>
+<div id="mission">Mission</div>
+<div id="timer">T-00:00:00</div>
+</body>
+</html>
