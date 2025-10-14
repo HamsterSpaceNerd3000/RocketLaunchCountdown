@@ -1,46 +1,27 @@
 <!DOCTYPE html>
-    <html>
-    <head>
-    <meta charset="UTF-8">
-    <style>
-    body {
-        margin: 0;
-        background-color: black;
-        color: white;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        font-family: Consolas, monospace;
-        overflow: hidden;
-    }
-    #mission {
-        font-size: 4vw;
-        text-align: center;
-        margin-bottom: 10px;
-    }
-    #timer {
-        font-size: 8vw;
-        text-align: center;
-        margin-bottom: 20px;
-    }
-    </style>
-    <script>
-    // Auto-refresh every second to update the countdown and timeline if needed
-    setTimeout(() => location.reload(), 1000);
-    </script>
-    </head>
-    <body>
-    <div id="mission">Mission</div>
-    <div id="timer">T-00:00:00</div>
-    
-    <iframe 
-        id="timeline"
-        src="https://docs.google.com/spreadsheets/d/e/2PACX-1vQssCeiHQwlh-2SKHyQnw_KEoYwU9UY9sP0MLNVvW30cEUFVgr8lJ33fAz0SMWmRGfsVBuUqxJ1a4Ba/pubhtml?gid=855477916&single=true"
-        width="90%"
-        height="400"
-        style="border:none; border-radius:10px; overflow:hidden;">
-    </iframe>
-    
-    </body>
-    </html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {
+    margin: 0;
+    background-color: black;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-family: Consolas, monospace;
+}
+#mission { font-size: 4vw; margin-bottom: 20px; }
+#timer { font-size: 8vw; margin-bottom: 40px; }
+</style>
+<script>
+setTimeout(() => location.reload(), 1000);
+</script>
+</head>
+<body>
+<div id="mission">Starship Flight 12</div>
+<div id="timer">T-00:00:00</div>
+</body>
+</html>

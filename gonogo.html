@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+body {
+    margin: 0;
+    background-color: black;
+    color: white;
+    font-family: Consolas, monospace;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+#gonogo {
+    display: flex;
+    gap: 40px;
+}
+.status-box {
+    border: 2px solid white;
+    padding: 20px 40px;
+    font-size: 2.5vw;
+    text-align: center;
+    background-color: #111;
+}
+.go { color: #0f0; }
+.nogo { color: #f00; }
+</style>
+<script>
+setTimeout(() => location.reload(), 5000);
+</script>
+</head>
+<body>
+<div id="gonogo">
+    <div class="status-box go">Range: GO</div>
+    <div class="status-box go">Vehicle: GO</div>
+    <div class="status-box go">Weather: GO</div>
+</div>
+</body>
+</html>

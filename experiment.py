@@ -131,7 +131,8 @@ class CountdownApp:
         self.target_time = None
         self.hold_start_time = None
         self.remaining_time = 0
-        self.mission_name = "Mission"
+        self.mission_name = "Placeholder Mission"
+        # fetch_gonogo() returns [Range, Weather, Vehicle] to match gonogo.html writer
         self.gonogo_values = fetch_gonogo()
         self.last_gonogo_update = time.time()
 
@@ -201,6 +202,17 @@ class CountdownApp:
         self.reset_btn = tk.Button(frame_buttons, text="⟳ Reset", command=self.reset, font=("Arial", 14))
         self.reset_btn.grid(row=0, column=3, padx=5)
 
+        frame_gn = tk.Frame(root, bg="black")
+        frame_gn.pack(pady=10)
+        # Labels displayed: Range, Weather, Vehicle — match write_gonogo_html ordering
+        self.range_label = tk.Label(frame_gn, text="RANGE: N/A", font=("Consolas", 20), fg="white", bg="black")
+        self.range_label.pack()
+        self.weather_label = tk.Label(frame_gn, text="WEATHER: N/A", font=("Consolas", 20), fg="white", bg="black")
+        self.weather_label.pack()
+        self.vehicle_label = tk.Label(frame_gn, text="VEHICLE: N/A", font=("Consolas", 20), fg="white", bg="black")
+        self.vehicle_label.pack()
+
+
         self.update_inputs()
         self.update_clock()
 
@@ -223,7 +235,7 @@ class CountdownApp:
     # Control logic
     # ----------------------------
     def start(self):
-        self.mission_name = self.mission_entry.get().strip() or "Mission"
+        self.mission_name = self.mission_entry.get().strip() or "Placeholder Mission"
         self.running = True
         self.on_hold = False
         self.scrubbed = False
@@ -326,8 +338,13 @@ class CountdownApp:
         write_countdown_html(self.mission_name, timer_text)
 
         # Update Go/No-Go every 10 seconds
-        if now_time - self.last_gonogo_update > 0.5:
-            self.gonogo_values = fetch_gonogo()
+        if now_time - self.last_gonogo_update > 0.1:
+            # fetch_gonogo returns [Range, Weather, Vehicle]
+            self.range_status, self.weather, self.vehicle = fetch_gonogo()
+            self.range_label.config(text=f"RANGE: {self.range_status}")
+            self.weather_label.config(text=f"WEATHER: {self.weather}")
+            self.vehicle_label.config(text=f"VEHICLE: {self.vehicle}")
+            self.gonogo_values = [self.range_status, self.weather, self.vehicle]
             write_gonogo_html(self.gonogo_values)
             self.last_gonogo_update = now_time
 
@@ -337,6 +354,6 @@ class CountdownApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = CountdownApp(root)
-    write_countdown_html("Mission", "T-00:00:00")
+    write_countdown_html("Placeholder Mission", "T-00:00:00")
     write_gonogo_html(fetch_gonogo())
     root.mainloop()
