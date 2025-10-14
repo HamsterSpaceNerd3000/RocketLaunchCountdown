@@ -121,21 +121,24 @@ class CountdownApp:
         # Control buttons
         frame_buttons = tk.Frame(root, bg="black")
         frame_buttons.pack(pady=10)
-        self.start_btn = tk.Button(frame_buttons, text="▶ Start", command=self.start, font=("Arial", 14))
-        self.start_btn.pack(side="left", padx=5)
 
+        self.start_btn = tk.Button(frame_buttons, text="▶ Start", command=self.start, font=("Arial", 14))
+        self.start_btn.grid(row=0, column=0, padx=5)
+
+        # Hold and resume share the same position
         self.hold_btn = tk.Button(frame_buttons, text="⏸ Hold", command=self.hold, font=("Arial", 14))
-        self.hold_btn.pack(side="left", padx=5)
+        self.hold_btn.grid(row=0, column=1, padx=5)
 
         self.resume_btn = tk.Button(frame_buttons, text="⏵ Resume", command=self.resume, font=("Arial", 14))
-        # Hidden initially
-        self.resume_btn.pack_forget()
+        self.resume_btn.grid(row=0, column=1, padx=5)
+        self.resume_btn.grid_remove()  # hidden at start
 
         self.scrub_btn = tk.Button(frame_buttons, text="🚫 Scrub", command=self.scrub, font=("Arial", 14), fg="red")
-        self.scrub_btn.pack(side="left", padx=5)
+        self.scrub_btn.grid(row=0, column=2, padx=5)
 
         self.reset_btn = tk.Button(frame_buttons, text="⟳ Reset", command=self.reset, font=("Arial", 14))
-        self.reset_btn.pack(side="left", padx=5)
+        self.reset_btn.grid(row=0, column=3, padx=5)
+
 
         self.update_inputs()
         self.update_clock()
@@ -203,12 +206,13 @@ class CountdownApp:
             self.show_hold_button()
 
     def show_hold_button(self):
-        self.resume_btn.pack_forget()
-        self.hold_btn.pack(side="left", padx=5)
+        self.resume_btn.grid_remove()
+        self.hold_btn.grid()
 
     def show_resume_button(self):
-        self.hold_btn.pack_forget()
-        self.resume_btn.pack(side="left", padx=5)
+        self.hold_btn.grid_remove()
+        self.resume_btn.grid()
+
 
     def scrub(self):
         self.scrubbed = True
