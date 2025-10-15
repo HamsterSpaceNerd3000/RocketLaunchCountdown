@@ -1,5 +1,6 @@
 import tkinter as tk
 import time
+import threading
 from datetime import datetime
 import requests
 import csv
@@ -9,6 +10,7 @@ COUNTDOWN_HTML = "countdown.html"
 GONOGO_HTML = "gonogo.html"
 SHEET_LINK = "https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/export?format=csv&gid=855477916"
 session = requests.Session()
+appVersion = "0.2.0"
 
 # -------------------------
 # Fetch Go/No-Go Data
@@ -29,6 +31,17 @@ def fetch_gonogo():
         print(f"[ERROR] Failed to fetch Go/No-Go: {e}")
         return ["ERROR"] * 3
 
+
+# -------------------------
+# Helper for color
+# -------------------------
+def get_status_color(status):
+    """Return color name for a Go/No-Go status string."""
+    try:
+        return "green" if str(status).strip().upper() == "GO" else "red"
+    except Exception:
+        return "white"
+
 # -------------------------
 # Write Countdown HTML
 # -------------------------
@@ -48,7 +61,7 @@ body {{
     color: white;
     font-family: Consolas, monospace;
 }}
-#mission {{ font-size: 4vw; margin-bottom: 20px; }}
+#mission {{ font-size: 4vw; margin-bottom: 0; }}
 #timer {{ font-size: 8vw; margin-bottom: 40px; }}
 </style>
 <script>
@@ -119,9 +132,10 @@ setTimeout(() => location.reload(), 5000);
 class CountdownApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("RocketLaunchCountdown")
+        self.root.title("RocketLaunchCountdown" + " " + appVersion)
         self.root.config(bg="black")
         self.root.attributes("-topmost", True)
+        self.root.geometry("800x575")
 
         # State
         self.running = False
@@ -136,9 +150,13 @@ class CountdownApp:
         self.gonogo_values = fetch_gonogo()
         self.last_gonogo_update = time.time()
 
+        # Title
+        self.titletext = tk.Label(root, text="RocketLaunchCountdown", font=("Consolas", 24), fg="white", bg="black")
+        self.titletext.pack(pady=(10, 0))
+
         # Display
         self.text = tk.Label(root, text="T-00:00:00", font=("Consolas", 80, "bold"), fg="white", bg="black")
-        self.text.pack(padx=50, pady=20)
+        self.text.pack(pady=(0, 5))
 
         # Mission name input
         frame_top = tk.Frame(root, bg="black")
@@ -151,11 +169,32 @@ class CountdownApp:
         # Mode toggle
         frame_mode = tk.Frame(root, bg="black")
         frame_mode.pack(pady=5)
+
         self.mode_var = tk.StringVar(value="duration")
-        tk.Radiobutton(frame_mode, text="Duration", variable=self.mode_var, value="duration",
-                       fg="white", bg="black", command=self.update_inputs).pack(side="left", padx=5)
-        tk.Radiobutton(frame_mode, text="Clock Time", variable=self.mode_var, value="clock",
-                       fg="white", bg="black", command=self.update_inputs).pack(side="left", padx=5)
+
+        self.radio_duration = tk.Radiobutton(
+            frame_mode,
+            text="Duration",
+            variable=self.mode_var,
+            value="duration",
+            fg="white",
+            bg="black",
+            selectcolor="black",  # makes the dot visible
+            command=self.update_inputs
+        )
+        self.radio_duration.pack(side="left", padx=5)
+
+        self.radio_clock = tk.Radiobutton(
+            frame_mode,
+            text="Clock Time",
+            variable=self.mode_var,
+            value="clock",
+            fg="white",
+            bg="black",
+            selectcolor="black",  # makes the dot visible
+            command=self.update_inputs
+        )
+        self.radio_clock.pack(side="left", padx=5)
 
         # Duration inputs
         frame_duration = tk.Frame(root, bg="black")
@@ -211,6 +250,19 @@ class CountdownApp:
         self.weather_label.pack()
         self.vehicle_label = tk.Label(frame_gn, text="VEHICLE: N/A", font=("Consolas", 20), fg="white", bg="black")
         self.vehicle_label.pack()
+
+        # Footer
+        footer_frame = tk.Frame(root, bg="black")
+        footer_frame.pack(side="bottom", pady=0, fill="x")
+
+        self.footer_label = tk.Label(
+            footer_frame,
+            text="Made by HamsterSpaceNerd3000",  # or whatever you want
+            font=("Consolas", 12),
+            fg="black",
+            bg="white"
+        )
+        self.footer_label.pack(fill="x")
 
 
         self.update_inputs()
@@ -341,9 +393,9 @@ class CountdownApp:
         if now_time - self.last_gonogo_update > 0.1:
             # fetch_gonogo returns [Range, Weather, Vehicle]
             self.range_status, self.weather, self.vehicle = fetch_gonogo()
-            self.range_label.config(text=f"RANGE: {self.range_status}")
-            self.weather_label.config(text=f"WEATHER: {self.weather}")
-            self.vehicle_label.config(text=f"VEHICLE: {self.vehicle}")
+            self.range_label.config(text=f"RANGE: {self.range_status}", fg=get_status_color(self.range_status))
+            self.weather_label.config(text=f"WEATHER: {self.weather}", fg=get_status_color(self.weather))
+            self.vehicle_label.config(text=f"VEHICLE: {self.vehicle}", fg=get_status_color(self.vehicle))
             self.gonogo_values = [self.range_status, self.weather, self.vehicle]
             write_gonogo_html(self.gonogo_values)
             self.last_gonogo_update = now_time
@@ -352,8 +404,77 @@ class CountdownApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = CountdownApp(root)
-    write_countdown_html("Placeholder Mission", "T-00:00:00")
-    write_gonogo_html(fetch_gonogo())
-    root.mainloop()
+    # Show a small splash/loading GUI while we fetch initial data and write HTML files.
+    def show_splash_and_start():
+        splash = tk.Tk()
+        splash.title("RocketLaunchCountdown — Initialaization")
+        splash.config(bg="black")
+        splash.geometry("400x175")
+        splash.attributes("-topmost", True)
+
+        title = tk.Label(splash, text="RocketLaunchCountdown", fg="white", bg="black", font=("Arial", 20, "bold"))
+        title.pack(pady=(10,0))
+
+        lbl = tk.Label(splash, text="Loading resources...", fg="white", bg="black", font=("Arial", 14))
+        lbl.pack(pady=(0,5))
+
+        info = tk.Label(splash, text="Fetching Go/No-Go and preparing HTML files.", fg="#ccc", bg="black", font=("Arial", 10))
+        info.pack()
+
+        cont_btn = tk.Button(splash, text="Continue", state="disabled", width=12)
+        cont_btn.pack(pady=8)
+
+        # Footer
+        footer_frame = tk.Frame(splash, bg="black")
+        footer_frame.pack(side="bottom", pady=0, fill="x")
+
+        footer_label = tk.Label(
+            footer_frame,
+            text="Made by HamsterSpaceNerd3000",  # or whatever you want
+            font=("Consolas", 12),
+            fg="black",
+            bg="white"
+        )
+        footer_label.pack(fill="x")
+
+        # Shared flag to indicate initialization complete
+        init_state = { 'done': False, 'error': None }
+
+        def init_worker():
+            try:
+                # perform the same initial writes you had before
+                gonogo = fetch_gonogo()
+                write_countdown_html("Placeholder Mission", "T-00:00:00")
+                write_gonogo_html(gonogo)
+                init_state['done'] = True
+            except Exception as e:
+                init_state['error'] = str(e)
+                init_state['done'] = True
+
+        # Start background initialization
+        threading.Thread(target=init_worker, daemon=True).start()
+
+        def check_init():
+            if init_state['done']:
+                if init_state['error']:
+                    info.config(text=f"Initialization error: {init_state['error']}")
+                else:
+                    info.config(text="Ready. You may open browser sources now, then click Continue.")
+                    cont_btn.config(state="normal")
+                    splash.after(5000, on_continue)
+                return
+            splash.after(200, check_init)
+
+        def on_continue():
+            splash.destroy()
+            # now create the real main window
+            root = tk.Tk()
+            app = CountdownApp(root)
+            root.mainloop()
+
+        cont_btn.config(command=on_continue)
+        # begin polling
+        splash.after(100, check_init)
+        splash.mainloop()
+
+    show_splash_and_start()

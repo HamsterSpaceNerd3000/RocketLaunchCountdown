@@ -152,10 +152,26 @@ class CountdownApp:
         frame_mode = tk.Frame(root, bg="black")
         frame_mode.pack(pady=5)
         self.mode_var = tk.StringVar(value="duration")
-        tk.Radiobutton(frame_mode, text="Duration", variable=self.mode_var, value="duration",
-                       fg="white", bg="black", command=self.update_inputs).pack(side="left", padx=5)
-        tk.Radiobutton(frame_mode, text="Clock Time", variable=self.mode_var, value="clock",
-                       fg="white", bg="black", command=self.update_inputs).pack(side="left", padx=5)
+        self.rb_duration = tk.Radiobutton(frame_mode, text="Duration", variable=self.mode_var, value="duration",
+                                          fg="white", bg="black", indicatoron=0, width=12,
+                                          command=self.update_inputs)
+        self.rb_duration.pack(side="left", padx=5)
+        self.rb_clock = tk.Radiobutton(frame_mode, text="Clock Time", variable=self.mode_var, value="clock",
+                                       fg="black", bg="white", indicatoron=0, width=12,
+                                       command=self.update_inputs)
+        self.rb_clock.pack(side="left", padx=5)
+
+        def update_mode_buttons(*args):
+            val = self.mode_var.get()
+            if val == 'duration':
+                self.rb_duration.config(bg='black', fg='white', relief='sunken')
+                self.rb_clock.config(bg='white', fg='black', relief='raised')
+            else:
+                self.rb_duration.config(bg='white', fg='black', relief='raised')
+                self.rb_clock.config(bg='black', fg='white', relief='sunken')
+
+        self.mode_var.trace_add('write', update_mode_buttons)
+        update_mode_buttons()
 
         # Duration inputs
         frame_duration = tk.Frame(root, bg="black")
