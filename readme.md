@@ -5,3 +5,5 @@ Latest release: [RocketLaunchCountdown 0.2.0](https://github.com/HamsterSpaceNer
 INSTALL INSTRUCTIONS
 
 Install is simple, download the installer, run it, and afterwards make the app always run as administrator. (google how to make it always work)
+
+*NOTE The run as admin is needed for the HTML files to impliment correctly.

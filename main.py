@@ -5,12 +5,22 @@ from datetime import datetime
 import requests
 import csv
 import io
+import os
 
-COUNTDOWN_HTML = "countdown.html"
-GONOGO_HTML = "gonogo.html"
+
+# Get the user's Documents folder (cross-platform)
+documents_folder = os.path.join(os.path.expanduser("~"), "Documents")
+
+# Create your app folder inside Documents
+app_folder = os.path.join(documents_folder, "RocketLaunchCountdown")
+os.makedirs(app_folder, exist_ok=True)
+
+# Define file paths
+COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
+GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
 SHEET_LINK = "https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/export?format=csv&gid=855477916"
 session = requests.Session()
-appVersion = "0.2.0"
+appVersion = "0.2.1"
 
 # -------------------------
 # Fetch Go/No-Go Data
