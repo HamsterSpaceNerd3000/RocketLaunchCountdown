@@ -1,8 +1,10 @@
 import tkinter as tk
+from tkinter import messagebox, ttk
 import time
 import threading
 from datetime import datetime
 import requests
+import random
 import csv
 import io
 import os
@@ -17,6 +19,7 @@ os.makedirs(app_folder, exist_ok=True)
 
 COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
 GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
+GONOGO_JS = os.path.join(app_folder, "gonogo_data.js")
 SETTINGS_FILE = os.path.join(app_folder, "settings.json")
 
 # Default CSV link you provided (kept for CSV fetch fallback)
@@ -45,6 +48,57 @@ def save_settings(settings):
         json.dump(settings, f, indent=2)
 
 # -------------------------
+# Sheet fetching / manager
+# -------------------------
+def col_letters_to_index(col_letters: str) -> int:
+    """Convert column letters like 'A' or 'AA' to 0-based index."""
+    col_letters = col_letters.upper()
+    idx = 0
+    for ch in col_letters:
+        if 'A' <= ch <= 'Z':
+            idx = idx * 26 + (ord(ch) - ord('A') + 1)
+    return idx - 1
+
+def fetch_cell(sheet_url, cell_ref, timeout=2):
+    """Fetch a specific cell value from a public Google Sheet CSV link.
+
+    cell_ref like 'L2' or 'AA10'. Returns string value or 'Error: ...'.
+    """
+    try:
+        # add cache-buster to avoid stale cached CSV from Google
+        if sheet_url:
+            cb = int(time.time() * 1000)
+            fetch_url = sheet_url + ("&" if "?" in sheet_url else "?") + f"cb={cb}"
+        else:
+            fetch_url = sheet_url
+        resp = session.get(fetch_url, timeout=timeout)
+        resp.raise_for_status()
+        reader = csv.reader(io.StringIO(resp.text))
+        data = list(reader)
+        # parse cell_ref
+        # split letters then digits
+        letters = ''.join([c for c in cell_ref if c.isalpha()])
+        digits = ''.join([c for c in cell_ref if c.isdigit()])
+        # invalid cell ref -> treat as failure
+        if not letters or not digits:
+            return None
+        col = col_letters_to_index(letters)
+        row = int(digits) - 1
+        if row < 0 or col < 0:
+            return None
+        if row >= len(data) or col >= len(data[row]):
+            return None
+        return data[row][col].strip()
+    except Exception as e:
+        # network or parsing error -> return None so caller can treat as failure
+        print(f"[WARN] fetch_cell error for {cell_ref} @ {sheet_url}: {e}")
+        return None
+
+
+# Note: single-sheet behavior only. Multi-sheet manager removed; use top-level
+# settings keys `sheet_url` and `sheet_cells` in the Settings dialog.
+
+# -------------------------
 # Fetch (CSV) Go/No-Go (fallback/prefill)
 # -------------------------
 def fetch_gonogo_csv(csv_link=DEFAULT_CSV_LINK, timeout=3):
@@ -53,7 +107,10 @@ def fetch_gonogo_csv(csv_link=DEFAULT_CSV_LINK, timeout=3):
     Returns [Range, Weather, Vehicle] (strings).
     """
     try:
-        resp = session.get(csv_link, timeout=timeout)
+        # add cache-buster to try to get fresh CSV content from Google
+        cb = int(time.time() * 1000)
+        fetch_url = csv_link + ("&" if "?" in csv_link else "?") + f"cb={cb}"
+        resp = session.get(fetch_url, timeout=timeout)
         resp.raise_for_status()
         reader = csv.reader(io.StringIO(resp.text))
         data = list(reader)
@@ -64,17 +121,118 @@ def fetch_gonogo_csv(csv_link=DEFAULT_CSV_LINK, timeout=3):
             gonogo.append(value.strip().upper())
         return gonogo
     except Exception as e:
-        print(f"[ERROR] Failed to fetch Go/No-Go CSV: {e}")
-        return ["N/A", "N/A", "N/A"]
+        print(f"[WARN] Failed to fetch Go/No-Go CSV: {e}")
+        return None
+
+
+def parse_csv_and_get_cell(csv_text, cell_ref):
+    """Parse CSV text and return the value at cell_ref (A1-style) or None if missing."""
+    try:
+        reader = csv.reader(io.StringIO(csv_text))
+        data = list(reader)
+        letters = ''.join([c for c in cell_ref if c.isalpha()])
+        digits = ''.join([c for c in cell_ref if c.isdigit()])
+        # invalid cell ref -> signal failure
+        if not letters or not digits:
+            return None
+        col = col_letters_to_index(letters)
+        row = int(digits) - 1
+        if row < 0 or col < 0:
+            return None
+        if row >= len(data) or col >= len(data[row]):
+            return None
+        return data[row][col].strip()
+    except Exception:
+        return None
+
+
+def try_fetch_csv_text(url, timeout=3):
+    """Fetch CSV text with cache-buster; return text or None."""
+    try:
+        if not url:
+            return None
+        cb = int(time.time() * 1000)
+        fetch_url = url + ("&" if "?" in url else "?") + f"cb={cb}"
+        resp = session.get(fetch_url, timeout=timeout)
+        resp.raise_for_status()
+        return resp.text
+    except Exception:
+        return None
+
+
+def build_gviz_csv_url(sheet_url):
+    """Try to construct a gviz CSV URL from common sheet URLs.
+    Example: https://docs.google.com/spreadsheets/d/<id>/gviz/tq?tqx=out:csv&gid=<gid>
+    Returns None if it can't parse an id.
+    """
+    try:
+        if not sheet_url:
+            return None
+        parts = sheet_url.split('/d/')
+        if len(parts) < 2:
+            return None
+        spid = parts[1].split('/')[0]
+        gid = None
+        # try to extract gid param if present
+        if 'gid=' in sheet_url:
+            for seg in sheet_url.replace('?', '&').split('&'):
+                if seg.startswith('gid='):
+                    gid = seg.split('=', 1)[1]
+                    break
+        if not gid:
+            gid = '0'
+        return f"https://docs.google.com/spreadsheets/d/{spid}/gviz/tq?tqx=out:csv&gid={gid}"
+    except Exception:
+        return None
+
+
+def fetch_gonogo_values(sheet_url=None, csv_fallback=None, cells=None, timeout=1):
+    """Attempt to fetch the three gonogo values (Range, Weather, Vehicle).
+    Returns a list [R, W, V] or None on failure.
+    Tries gviz CSV first (usually fresher), then the export CSV, then fetch_gonogo_csv.
+    """
+    try:
+        url = sheet_url or csv_fallback or DEFAULT_CSV_LINK
+        # try gviz CSV first
+        gviz = build_gviz_csv_url(url)
+        csv_text = None
+        if gviz:
+            csv_text = try_fetch_csv_text(gviz, timeout=min(2, timeout))
+        if not csv_text:
+            csv_text = try_fetch_csv_text(url, timeout=timeout)
+        if csv_text:
+            # If specific cell mappings provided, use them and treat missing mapping as failure
+            if cells:
+                try:
+                    r = parse_csv_and_get_cell(csv_text, cells.get('Range', ''))
+                    w = parse_csv_and_get_cell(csv_text, cells.get('Weather', ''))
+                    v = parse_csv_and_get_cell(csv_text, cells.get('Vehicle', ''))
+                    if r is not None and w is not None and v is not None:
+                        return [r.strip().upper(), w.strip().upper(), v.strip().upper()]
+                    return None
+                except Exception:
+                    return None
+            # No mappings provided: fall back to default L2/L3/L4 positions (column 12 -> index 11)
+            reader = csv.reader(io.StringIO(csv_text))
+            data = list(reader)
+            vals = []
+            for i in [1,2,3]:
+                v = data[i][11] if len(data) > i and len(data[i]) > 11 else "N/A"
+                vals.append(v.strip().upper())
+            return vals
+        # last-resort: use existing CSV fetch helper which does similar work
+        return fetch_gonogo_csv(url)
+    except Exception:
+        return None
 
 # -------------------------
 # Utility
 # -------------------------
 def get_status_color(status):
-    status = (status or "").strip().upper()
-    if status == "GO": return "green"
-    if status == "NOGO" or status == "NOGO" or status == "NOGO": return "red"
-    return "white"
+    try:
+        return "green" if str(status).strip().upper() == "GO" else "red"
+    except Exception:
+        return "white"
 
 def ensure_iframe_url(url):
     """
@@ -131,10 +289,14 @@ def write_gonogo_html_from_values(values):
     """
     # ensure three items:
     vals = (values + ["N/A","N/A","N/A"])[:3]
+    ts = int(time.time() * 1000)
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <style>
 body {{
     margin: 0;
@@ -160,11 +322,14 @@ body {{
 .go {{ color: #0f0; }}
 .nogo {{ color: #f00; }}
 </style>
+</script>
 <script>
-setTimeout(()=>location.reload(),5000);
+// Reload frequently but keep it small to be responsive in OBS browser-source
+setTimeout(()=>location.reload(),1000);
 </script>
 </head>
 <body>
+<!-- updated: {ts} -->
 <div id="gonogo">
     <div class="status-box {'go' if vals[0].strip().upper()=='GO' else 'nogo'}">Range: {vals[0]}</div>
     <div class="status-box {'go' if vals[2].strip().upper()=='GO' else 'nogo'}">Vehicle: {vals[2]}</div>
@@ -172,8 +337,16 @@ setTimeout(()=>location.reload(),5000);
 </div>
 </body>
 </html>"""
-    with open(GONOGO_HTML, "w", encoding="utf-8") as f:
+    # atomic write: write to temp file then rename
+    tmp = GONOGO_HTML + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(html)
+    try:
+        os.replace(tmp, GONOGO_HTML)
+    except Exception:
+        # best-effort fallback
+        with open(GONOGO_HTML, "w", encoding="utf-8") as f:
+            f.write(html)
 
 def write_gonogo_html_iframe(sheet_embed_url):
     """
@@ -181,14 +354,20 @@ def write_gonogo_html_iframe(sheet_embed_url):
     Prefer users to publish-to-web and paste the pubhtml URL.
     """
     # safe empty handling
+    ts = int(time.time() * 1000)
     if not sheet_embed_url:
         content = "<div style='color:orange'>No sheet URL set in settings</div>"
     else:
-        content = f'<iframe src="{sheet_embed_url}" width="100%" height="600" style="border:none;"></iframe>'
+        # add cache-busting query param so iframe reloads when we update the file
+        glue = '&' if '?' in sheet_embed_url else '?'
+        content = f'<iframe src="{sheet_embed_url}{glue}cb={ts}" width="100%" height="600" style="border:none;"></iframe>'
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <style>
 body {{
     margin: 0;
@@ -202,17 +381,24 @@ body {{
 }}
 </style>
 <script>
-setTimeout(()=>location.reload(),3000);
+setTimeout(()=>location.reload(),1000);
 </script>
 </head>
 <body>
+<!-- updated: {ts} -->
 <div class="container">
 {content}
 </div>
 </body>
 </html>"""
-    with open(GONOGO_HTML, "w", encoding="utf-8") as f:
+    tmp = GONOGO_HTML + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(html)
+    try:
+        os.replace(tmp, GONOGO_HTML)
+    except Exception:
+        with open(GONOGO_HTML, "w", encoding="utf-8") as f:
+            f.write(html)
 
 # -------------------------
 # Countdown App
@@ -330,6 +516,15 @@ class CountdownApp:
         self.settings_btn = tk.Button(ctrl_frame, text="⚙ Settings", command=self.open_settings, font=("Arial", 12))
         self.settings_btn.pack(side="left", padx=6)
 
+        # Quick view for sheet data (single-sheet mode)
+        self.sheet_show_btn = tk.Button(ctrl_frame, text="Show Sheet Data", command=self.show_sheet_data, font=("Arial", 12))
+        self.sheet_show_btn.pack(side="left", padx=6)
+        self.refresh_btn = tk.Button(ctrl_frame, text="Refresh Now", command=self.refresh_gonogo_now, font=("Arial", 12))
+        self.refresh_btn.pack(side="left", padx=6)
+        # Rapid poll button: temporarily speed up polling for quick spreadsheet edits
+        self.rapid_btn = tk.Button(ctrl_frame, text="Rapid Poll", command=lambda: self.start_rapid_poll(15), font=("Arial", 12))
+        self.rapid_btn.pack(side="left", padx=6)
+
         # Manual GO/NO-GO toggles (visible only in manual mode)
         self.manual_frame = tk.Frame(ctrl_frame, bg="black")
         self.manual_frame.pack(side="left", padx=10)
@@ -351,11 +546,63 @@ class CountdownApp:
         self.vehicle_label = tk.Label(frame_gn, text="VEHICLE: N/A", font=("Consolas", 18), fg="white", bg="black")
         self.vehicle_label.pack()
 
+        # Initialize gonogo cache and apply initial values (non-blocking preferred)
+        self.gonogo_values = ["N/A", "N/A", "N/A"]
+        # rapid polling window timestamp (seconds since epoch)
+        self._rapid_until = 0
+        # last rapid-update timestamp (seconds since epoch)
+        self.last_gonogo_update = 0
+        # inflight flag so we only have one background fetch at a time
+        self._gonogo_fetch_inflight = False
+
+        # Try a quick synchronous prefill if sheet_cells are configured (small/fast requests only)
+        try:
+            if self.settings.get("mode", "sheet") == "sheet":
+                cells = self.settings.get("sheet_cells", {})
+                url = self.settings.get("sheet_url") or self.csv_link
+                if cells and url:
+                    # fetch CSV once and parse mapped cells locally to avoid multiple HTTP requests
+                    try:
+                        cb = int(time.time() * 1000)
+                        fetch_url = url + ("&" if "?" in url else "?") + f"cb={cb}"
+                        resp = session.get(fetch_url, timeout=2)
+                        resp.raise_for_status()
+                        csv_text = resp.text
+                        r = parse_csv_and_get_cell(csv_text, cells.get("Range", "")) or "N/A"
+                        w = parse_csv_and_get_cell(csv_text, cells.get("Weather", "")) or "N/A"
+                        v = parse_csv_and_get_cell(csv_text, cells.get("Vehicle", "")) or "N/A"
+                        self.gonogo_values = [r.upper(), w.upper(), v.upper()]
+                    except Exception:
+                        # fallback to CSV fetch helper
+                        self.gonogo_values = fetch_gonogo_csv(self.csv_link) or ["N/A", "N/A", "N/A"]
+                else:
+                    # quick CSV fallback
+                    self.gonogo_values = fetch_gonogo_csv(self.csv_link) or ["N/A", "N/A", "N/A"]
+            else:
+                self.gonogo_values = [self.manual_range, self.manual_weather, self.manual_vehicle]
+        except Exception:
+            # keep defaults on failure
+            pass
+
+        # apply initial gonogo UI and HTML
+        write_gonogo_html_from_values(self.gonogo_values)
+        self.range_label.config(text=f"RANGE: {self.gonogo_values[0]}", fg=get_status_color(self.gonogo_values[0]))
+        self.weather_label.config(text=f"WEATHER: {self.gonogo_values[1]}", fg=get_status_color(self.gonogo_values[1]))
+        self.vehicle_label.config(text=f"VEHICLE: {self.gonogo_values[2]}", fg=get_status_color(self.gonogo_values[2]))
+
+        # start background poller for Go/No-Go updates
+        self.gonogo_poll_interval = int(self.settings.get("gonogo_interval", 10))
+        # failure/backoff state
+        self._gonogo_failures = 0
+        self._gonogo_backoff_until = 0
+        self._gonogo_max_failures = int(self.settings.get("gonogo_max_failures", 5))
+        self.start_gonogo_poller()
+
         # footer
         footer_frame = tk.Frame(root, bg="black")
         footer_frame.pack(side="bottom", pady=0, fill="x")
         self.footer_label = tk.Label(footer_frame, text=f"Made by HamsterSpaceNerd3000 — v{appVersion}",
-                                     font=("Consolas", 12), fg="black", bg="white")
+                                        font=("Consolas", 12), fg="black", bg="white")
         self.footer_label.pack(fill="x")
 
         # initialize visibility + values
@@ -374,6 +621,38 @@ class CountdownApp:
         else:
             # sheet mode -> hide manual controls
             self.manual_frame.pack_forget()
+
+    def show_sheet_data(self):
+        # Single-sheet mode: use top-level sheet_url and sheet_cells
+        cells = self.settings.get("sheet_cells", {})
+        url = self.settings.get("sheet_url", "")
+        if not cells or not url:
+            messagebox.showinfo("Info", "No sheet URL or cell mappings configured in Settings.")
+            return
+        output = ["--- Sheet Data ---"]
+        for name, cell in cells.items():
+            val = fetch_cell(url, cell)
+            output.append(f"{name}: {val}")
+        messagebox.showinfo("Sheet Data", "\n".join(output))
+
+    def refresh_gonogo_now(self):
+        # Reset backoff and attempt an aggressive, short polling loop (up to 1s)
+        def worker():
+            prev = list(self.gonogo_values)
+            deadline = time.time() + 1.0  # 1 second budget to try to get fresh data
+            # clear temporary backoff to allow immediate requests
+            self._gonogo_failures = 0
+            self._gonogo_backoff_until = 0
+            while time.time() < deadline:
+                try:
+                    self.poll_gonogo_once()
+                except Exception:
+                    pass
+                # if values changed, stop early
+                if self.gonogo_values != prev:
+                    break
+                time.sleep(0.18)
+        threading.Thread(target=worker, daemon=True).start()
 
     def open_settings(self):
         win = tk.Toplevel(self.root)
@@ -395,18 +674,53 @@ class CountdownApp:
         sheet_entry.insert(0, self.settings.get("sheet_url", ""))
         sheet_entry.pack(padx=10, pady=(0,10))
 
+        # Cell mappings: allow user to specify exact cells for Range/Weather/Vehicle
+        tk.Label(win, text="Cell mappings (A1-style). Use selected sheet or these values:", bg="black", fg="white").pack(anchor="w", padx=10)
+        cells = self.settings.get("sheet_cells", {})
+        mapping_frame = tk.Frame(win, bg="black")
+        mapping_frame.pack(anchor="w", padx=10, pady=(4,10))
+        tk.Label(mapping_frame, text="Range:", bg="black", fg="white").grid(row=0, column=0, sticky="w")
+        range_entry = tk.Entry(mapping_frame, width=8)
+        range_entry.insert(0, cells.get("Range", "L2"))
+        range_entry.grid(row=0, column=1, padx=6)
+        tk.Label(mapping_frame, text="Weather:", bg="black", fg="white").grid(row=0, column=2, sticky="w")
+        weather_entry = tk.Entry(mapping_frame, width=8)
+        weather_entry.insert(0, cells.get("Weather", "L3"))
+        weather_entry.grid(row=0, column=3, padx=6)
+        tk.Label(mapping_frame, text="Vehicle:", bg="black", fg="white").grid(row=0, column=4, sticky="w")
+        vehicle_entry = tk.Entry(mapping_frame, width=8)
+        vehicle_entry.insert(0, cells.get("Vehicle", "L4"))
+        vehicle_entry.grid(row=0, column=5, padx=6)
+
         def save_settings_cmd():
             new_mode = mode_var.get()
             new_url = sheet_entry.get().strip()
             self.settings["mode"] = new_mode
             self.settings["sheet_url"] = new_url
+            # save cell mappings to top-level settings (used when no selected_sheet is set)
+            new_cells = {
+                "Range": range_entry.get().strip(),
+                "Weather": weather_entry.get().strip(),
+                "Vehicle": vehicle_entry.get().strip()
+            }
+            # store mappings (only keys with non-empty values)
+            self.settings["sheet_cells"] = {k: v for k, v in new_cells.items() if v}
+            # single-sheet mode: mappings are stored in top-level sheet_cells only
             save_settings(self.settings)
             # regenerate gonogo HTML according to mode
             if new_mode == "sheet":
                 embed = ensure_iframe_url(new_url)
                 write_gonogo_html_iframe(embed)
-                # prefill labels from CSV fetch if possible
-                vals = fetch_gonogo_csv(self.csv_link)
+                # prefill labels from top-level sheet_url & sheet_cells if provided
+                cells = self.settings.get("sheet_cells", {})
+                url = self.settings.get("sheet_url")
+                if cells and url:
+                    r = fetch_cell(url, cells.get("Range", "")) or "N/A"
+                    w = fetch_cell(url, cells.get("Weather", "")) or "N/A"
+                    v = fetch_cell(url, cells.get("Vehicle", "")) or "N/A"
+                    vals = [r, w, v]
+                else:
+                    vals = fetch_gonogo_csv(self.csv_link)
                 self.range_label.config(text=f"RANGE: {vals[0]}", fg=get_status_color(vals[0]))
                 self.weather_label.config(text=f"WEATHER: {vals[1]}", fg=get_status_color(vals[1]))
                 self.vehicle_label.config(text=f"VEHICLE: {vals[2]}", fg=get_status_color(vals[2]))
@@ -573,27 +887,193 @@ class CountdownApp:
         self.text.config(text=timer_text)
         write_countdown_html(self.mission_name, timer_text)
 
-        # Update gonogo block depending on settings.mode
-        mode = self.settings.get("mode", "sheet")
-        if mode == "sheet":
-            # ensure embed is current
-            embed = ensure_iframe_url(self.settings.get("sheet_url", ""))
-            write_gonogo_html_iframe(embed)
-            # optionally update mirrored labels by fetching CSV (best-effort)
-            vals = fetch_gonogo_csv(self.csv_link)
-            self.range_label.config(text=f"RANGE: {vals[0]}", fg=get_status_color(vals[0]))
-            self.weather_label.config(text=f"WEATHER: {vals[1]}", fg=get_status_color(vals[1]))
-            self.vehicle_label.config(text=f"VEHICLE: {vals[2]}", fg=get_status_color(vals[2]))
-        else:
-            # manual mode: write gonogo based on manual toggles and update labels
-            vals = [self.manual_range, self.manual_weather, self.manual_vehicle]
-            write_gonogo_html_from_values(vals)
-            self.range_label.config(text=f"RANGE: {vals[0]}", fg=get_status_color(vals[0]))
-            self.weather_label.config(text=f"WEATHER: {vals[1]}", fg=get_status_color(vals[1]))
-            self.vehicle_label.config(text=f"VEHICLE: {vals[2]}", fg=get_status_color(vals[2]))
+        # Gonogo updates are handled by background poller which updates `self.gonogo_values`
+        # Here we just ensure the display mirrors the latest cache (non-blocking)
+        vals = self.gonogo_values
+        # Only update UI here; file writes are done by the poller when values change
+        self.range_label.config(text=f"RANGE: {vals[0]}", fg=get_status_color(vals[0]))
+        self.weather_label.config(text=f"WEATHER: {vals[1]}", fg=get_status_color(vals[1]))
+        self.vehicle_label.config(text=f"VEHICLE: {vals[2]}", fg=get_status_color(vals[2]))
+
+        # Rapid near-instant fetch: if it's been >0.1s since last rapid update, start a quick background fetch
+        try:
+            if now_time - getattr(self, 'last_gonogo_update', 0) > 0.1 and not getattr(self, '_gonogo_fetch_inflight', False):
+                # mark inflight and perform quick fetch in background
+                self._gonogo_fetch_inflight = True
+                def rapid_fetch():
+                    try:
+                        # Try fetching mapped cells if configured
+                        url = self.settings.get('sheet_url') or self.csv_link
+                        cells = self.settings.get('sheet_cells', {})
+                        new_vals = None
+                        if cells and url:
+                            # fetch CSV once via helper (gviz preferred inside helper)
+                            # try to use gviz first, then export
+                            gviz = build_gviz_csv_url(url)
+                            csv_text = None
+                            if gviz:
+                                csv_text = try_fetch_csv_text(gviz, timeout=1)
+                            if not csv_text:
+                                csv_text = try_fetch_csv_text(url, timeout=1)
+                            if csv_text:
+                                r = parse_csv_and_get_cell(csv_text, cells.get('Range', ''))
+                                w = parse_csv_and_get_cell(csv_text, cells.get('Weather', ''))
+                                v = parse_csv_and_get_cell(csv_text, cells.get('Vehicle', ''))
+                                if r is not None and w is not None and v is not None:
+                                    new_vals = [str(r).upper(), str(w).upper(), str(v).upper()]
+                        if new_vals is None:
+                            # fallback to generic fetch helper with short timeout, pass mappings so it won't mix sources
+                            new_vals = fetch_gonogo_values(url, self.csv_link, cells=cells, timeout=1)
+                        if new_vals and new_vals != self.gonogo_values:
+                            self.gonogo_values = new_vals
+                            # schedule UI update on main thread
+                            try:
+                                self.root.after(0, lambda: (
+                                    write_gonogo_html_from_values(self.gonogo_values),
+                                    self.range_label.config(text=f"RANGE: {self.gonogo_values[0]}", fg=get_status_color(self.gonogo_values[0])),
+                                    self.weather_label.config(text=f"WEATHER: {self.gonogo_values[1]}", fg=get_status_color(self.gonogo_values[1])),
+                                    self.vehicle_label.config(text=f"VEHICLE: {self.gonogo_values[2]}", fg=get_status_color(self.gonogo_values[2]))
+                                ))
+                            except Exception:
+                                pass
+                        self.last_gonogo_update = time.time()
+                    finally:
+                        self._gonogo_fetch_inflight = False
+                threading.Thread(target=rapid_fetch, daemon=True).start()
+        except Exception:
+            pass
 
         # schedule next tick
         self.root.after(500, self.update_clock)  # 2× per second
+
+    # ----------------------------
+    # Go/No-Go poller (background)
+    # ----------------------------
+    def start_gonogo_poller(self):
+        # run the poller in a background thread to avoid blocking the UI
+        def poll_loop():
+            while True:
+                try:
+                    self.poll_gonogo_once()
+                except Exception:
+                    pass
+                # support rapid poll mode: if _rapid_until is set and not expired, use 1s
+                now = time.time()
+                if getattr(self, '_rapid_until', 0) > now:
+                    poll_interval = 1.0
+                else:
+                    # use configured interval (ensure float and minimum 0.5s)
+                    try:
+                        poll_interval = max(0.5, float(self.gonogo_poll_interval))
+                    except Exception:
+                        poll_interval = 1.0
+                time.sleep(poll_interval)
+        t = threading.Thread(target=poll_loop, daemon=True)
+        t.start()
+
+    def start_rapid_poll(self, seconds=15):
+        """Enable rapid polling for a short duration (seconds)."""
+        try:
+            self._rapid_until = time.time() + float(seconds)
+            # kick off a UI refresher to show rapid status on button
+            try:
+                self.root.after(200, self._update_rapid_button_ui)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _update_rapid_button_ui(self):
+        # update the rapid button label to indicate remaining time
+        now = time.time()
+        if getattr(self, '_rapid_until', 0) > now:
+            remaining = int(getattr(self, '_rapid_until', 0) - now)
+            try:
+                self.rapid_btn.config(text=f"Rapid ({remaining}s)")
+            except Exception:
+                pass
+            # continue updating until expired
+            try:
+                self.root.after(500, self._update_rapid_button_ui)
+            except Exception:
+                pass
+        else:
+            try:
+                self.rapid_btn.config(text="Rapid Poll")
+            except Exception:
+                pass
+
+    def poll_gonogo_once(self):
+        # Determine what to fetch: top-level mapping or fallback
+        mode = self.settings.get("mode", "sheet")
+        if mode != "sheet":
+            # manual mode: nothing to poll
+            return
+        # check backoff window
+        now = time.time()
+        if getattr(self, '_gonogo_backoff_until', 0) > now:
+            return
+
+        cells = self.settings.get("sheet_cells", {})
+        url = self.settings.get("sheet_url") or self.csv_link
+
+        new_vals = None
+        # Try mapped fetch first but use a single CSV HTTP request to reduce latency
+        if cells and url:
+            try:
+                cb = int(time.time() * 1000)
+                fetch_url = url + ("&" if "?" in url else "?") + f"cb={cb}"
+                resp = session.get(fetch_url, timeout=3)
+                resp.raise_for_status()
+                csv_text = resp.text
+                r = parse_csv_and_get_cell(csv_text, cells.get("Range", ""))
+                w = parse_csv_and_get_cell(csv_text, cells.get("Weather", ""))
+                v = parse_csv_and_get_cell(csv_text, cells.get("Vehicle", ""))
+                if r is not None and w is not None and v is not None:
+                    new_vals = [str(r).upper(), str(w).upper(), str(v).upper()]
+            except Exception as e:
+                print(f"[WARN] mapped CSV fetch failed: {e}")
+
+        # If mapped failed or not provided, try CSV fallback (also uses cache-busted URL)
+        if new_vals is None:
+            csv_vals = fetch_gonogo_csv(url)
+            if csv_vals is not None:
+                new_vals = csv_vals
+
+        if new_vals is None:
+            # treat as failure: increment failure count and compute backoff
+            self._gonogo_failures = getattr(self, '_gonogo_failures', 0) + 1
+            # exponential backoff with jitter (seconds)
+            backoff = min(60, (2 ** min(self._gonogo_failures, 6)))
+            jitter = random.uniform(0, backoff * 0.3)
+            wait = backoff + jitter
+            self._gonogo_backoff_until = now + wait
+            print(f"[WARN] gonogo fetch failed #{self._gonogo_failures}; backing off for {wait:.1f}s")
+            # If too many failures, switch to iframe-only mode (less aggressive polling)
+            if self._gonogo_failures >= getattr(self, '_gonogo_max_failures', 5):
+                print("[WARN] Switching to iframe fallback due to repeated failures")
+                embed = ensure_iframe_url(self.settings.get('sheet_url', ''))
+                write_gonogo_html_iframe(embed)
+                # set longer backoff
+                self._gonogo_backoff_until = now + 300
+            return
+
+        # Success: reset failures and apply new values
+        self._gonogo_failures = 0
+
+        # if changed, update cache and write files via main thread
+        if new_vals != self.gonogo_values:
+            self.gonogo_values = new_vals
+            def apply_update():
+                write_gonogo_html_from_values(self.gonogo_values)
+                self.range_label.config(text=f"RANGE: {self.gonogo_values[0]}", fg=get_status_color(self.gonogo_values[0]))
+                self.weather_label.config(text=f"WEATHER: {self.gonogo_values[1]}", fg=get_status_color(self.gonogo_values[1]))
+                self.vehicle_label.config(text=f"VEHICLE: {self.gonogo_values[2]}", fg=get_status_color(self.gonogo_values[2]))
+            try:
+                self.root.after(0, apply_update)
+            except Exception:
+                # if root is gone, just ignore
+                pass
 
 # -------------------------
 # Main: splash then launch
@@ -640,6 +1120,7 @@ if __name__ == "__main__":
                 else:
                     info.config(text="Ready. You may open browser sources now, then click Continue.")
                     cont_btn.config(state="normal")
+                    splash.after(5000, on_continue)  # auto-continue after 5s
                 return
             splash.after(200, check_init)
 
