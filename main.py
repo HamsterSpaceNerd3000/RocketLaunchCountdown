@@ -6,6 +6,7 @@ import requests
 import csv
 import io
 import os
+import json
 
 
 # Get the user's Documents folder (cross-platform)
@@ -20,26 +21,79 @@ COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
 GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
 SHEET_LINK = "https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/export?format=csv&gid=855477916"
 session = requests.Session()
-appVersion = "0.2.1"
+appVersion = "0.3.0"
+SETTINGS_FILE = os.path.join(app_folder, "settings.json")
+
+# Default settings
+DEFAULT_SETTINGS = {
+    "mode": "spreadsheet",  # or 'buttons'
+    "sheet_link": SHEET_LINK,
+    # rows are 1-based as shown in spreadsheet; default 2,3,4 -> indices 1,2,3
+    "range_row": 2,
+    "weather_row": 3,
+    "vehicle_row": 4,
+    "column": 12  # 1-based column (default column 12 -> index 11)
+}
+
+
+def load_settings():
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as fh:
+                return json.load(fh)
+    except Exception:
+        pass
+    # ensure default saved
+    save_settings(DEFAULT_SETTINGS)
+    return DEFAULT_SETTINGS.copy()
+
+
+def save_settings(s):
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as fh:
+            json.dump(s, fh, indent=2)
+    except Exception:
+        pass
+
 
 # -------------------------
 # Fetch Go/No-Go Data
 # -------------------------
 def fetch_gonogo():
-    """Fetch Go/No-Go parameters from L2, L3, L4 (rows 2,3,4; col 12)"""
+    """Fetch Go/No-Go parameters either from configured spreadsheet or return manual button values."""
+    settings = load_settings()
+    mode = settings.get('mode', 'spreadsheet')
+    # If manual mode, read values from a runtime stash (set by the GUI buttons)
+    if mode == 'buttons':
+        # stored values will be on the app class; fallback to N/A
+        try:
+            return [getattr(fetch_gonogo, 'manual_range', 'N/A'),
+                    getattr(fetch_gonogo, 'manual_weather', 'N/A'),
+                    getattr(fetch_gonogo, 'manual_vehicle', 'N/A')]
+        except Exception:
+            return ['N/A', 'N/A', 'N/A']
+
+    # spreadsheet mode
+    link = settings.get('sheet_link', SHEET_LINK)
+    col = max(1, int(settings.get('column', 12))) - 1
+    rows = [int(settings.get('range_row', 2)) - 1,
+            int(settings.get('weather_row', 3)) - 1,
+            int(settings.get('vehicle_row', 4)) - 1]
     try:
-        resp = session.get(SHEET_LINK, timeout=2)  # timeout for faster failure if network is slow
+        resp = session.get(link, timeout=3)
         resp.raise_for_status()
         reader = csv.reader(io.StringIO(resp.text))
         data = list(reader)
         gonogo = []
-        for i in [1, 2, 3]:
-            value = data[i][11] if len(data[i]) > 11 else "N/A"
-            gonogo.append(value.strip().upper())  # <-- always uppercase
+        for r in rows:
+            val = 'N/A'
+            if 0 <= r < len(data) and len(data[r]) > col:
+                val = data[r][col]
+            gonogo.append(val.strip().upper())
         return gonogo
     except Exception as e:
-        print(f"[ERROR] Failed to fetch Go/No-Go: {e}")
-        return ["ERROR"] * 3
+        print(f"[ERROR] Failed to fetch Go/No-Go from sheet: {e}")
+        return ["ERROR", "ERROR", "ERROR"]
 
 
 # -------------------------
@@ -142,10 +196,10 @@ setTimeout(() => location.reload(), 5000);
 class CountdownApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("RocketLaunchCountdown" + " " + appVersion)
+        self.root.title(f"RocketLaunchCountdown {appVersion}")
         self.root.config(bg="black")
         self.root.attributes("-topmost", True)
-        self.root.geometry("800x575")
+        self.root.geometry("800x615")
 
         # State
         self.running = False
@@ -250,6 +304,28 @@ class CountdownApp:
 
         self.reset_btn = tk.Button(frame_buttons, text="⟳ Reset", command=self.reset, font=("Arial", 14))
         self.reset_btn.grid(row=0, column=3, padx=5)
+        # Settings button moved next to control buttons (match size/style)
+        settings_btn = tk.Button(frame_buttons, text="Settings", command=self.show_settings_window, font=("Arial", 14), width=10)
+        settings_btn.grid(row=0, column=4, padx=6)
+
+        # Note: gonogo mode switching remains in Settings; manual buttons appear when mode == 'buttons'
+
+        # Manual Go/No-Go buttons will go next to control buttons
+        self.manual_frame = tk.Frame(root, bg="black")
+        self.manual_frame.pack(pady=6)
+
+        # Buttons now toggle current state between GO and NOGO
+        self.range_toggle_btn = tk.Button(self.manual_frame, text="Range: Toggle", width=12,
+                                          command=lambda: self._toggle_manual('range'))
+        self.weather_toggle_btn = tk.Button(self.manual_frame, text="Weather: Toggle", width=12,
+                                           command=lambda: self._toggle_manual('weather'))
+        self.vehicle_toggle_btn = tk.Button(self.manual_frame, text="Vehicle: Toggle", width=12,
+                                           command=lambda: self._toggle_manual('vehicle'))
+
+        # Placeholders; visibility will be controlled by settings
+        self.range_toggle_btn.grid(row=0, column=0, padx=4, pady=2)
+        self.weather_toggle_btn.grid(row=0, column=1, padx=4, pady=2)
+        self.vehicle_toggle_btn.grid(row=0, column=2, padx=4, pady=2)
 
         frame_gn = tk.Frame(root, bg="black")
         frame_gn.pack(pady=10)
@@ -273,10 +349,199 @@ class CountdownApp:
             bg="white"
         )
         self.footer_label.pack(fill="x")
-
-
         self.update_inputs()
+        # set initial manual button visibility from settings
+        self.update_manual_visibility()
         self.update_clock()
+
+    # ----------------------------
+    # Settings window
+    # ----------------------------
+    def show_settings_window(self):
+        settings = load_settings()
+
+        win = tk.Toplevel(self.root)
+        win.config(bg="black")
+        win.title("Settings")
+        win.geometry("560x200")
+        win.transient(self.root)
+
+        # Mode selection
+        frame_mode = tk.Frame(win)
+        frame_mode.config(bg="black")
+        frame_mode.pack(fill='x', pady=8, padx=8)
+        tk.Label(frame_mode, text="Mode:", fg="white", bg="black").pack(side='left')
+        mode_var = tk.StringVar(value=settings.get('mode', 'spreadsheet'))
+        tk.Radiobutton(frame_mode, text='Spreadsheet', variable=mode_var, value='spreadsheet', fg="white", bg="black", selectcolor="black").pack(side='left', padx=8)
+        tk.Radiobutton(frame_mode, text='Buttons (manual)', variable=mode_var, value='buttons', fg="white", bg="black", selectcolor="black").pack(side='left', padx=8)
+
+        # Spreadsheet config
+        frame_sheet = tk.LabelFrame(win, text='Spreadsheet configuration', fg='white', bg='black')
+        frame_sheet.config(bg="black")
+        frame_sheet.pack(fill='x', padx=8, pady=6)
+        tk.Label(frame_sheet, text='Sheet link (CSV export):', fg='white', bg='black').pack(anchor='w')
+        sheet_entry = tk.Entry(frame_sheet, width=80, fg='white', bg='#222', insertbackground='white')
+        sheet_entry.pack(fill='x', padx=6, pady=4)
+        sheet_entry.insert(0, settings.get('sheet_link', SHEET_LINK))
+
+        # Accept cells in 'L3' format for each parameter
+        cell_frame = tk.Frame(frame_sheet)
+        cell_frame.config(bg="black")
+        cell_frame.pack(fill='x', padx=6, pady=2)
+        tk.Label(cell_frame, text='Range cell (e.g. L3):', fg='white', bg='black').grid(row=0, column=0)
+        range_cell = tk.Entry(cell_frame, width=8, fg='white', bg='#222', insertbackground='white')
+        range_cell.grid(row=0, column=1, padx=4)
+        # show as L3 if present, otherwise build from numeric settings
+        try:
+            if 'range_cell' in settings:
+                range_cell.insert(0, settings.get('range_cell'))
+            else:
+                # convert numeric row/column to cell like L3
+                col = settings.get('column', DEFAULT_SETTINGS['column'])
+                row = settings.get('range_row', DEFAULT_SETTINGS['range_row'])
+                # column number to letters
+                def col_to_letters(n):
+                    s = ''
+                    while n > 0:
+                        n, r = divmod(n - 1, 26)
+                        s = chr(ord('A') + r) + s
+                    return s
+                range_cell.insert(0, f"{col_to_letters(col)}{row}")
+        except Exception:
+            range_cell.insert(0, f"L3")
+
+        tk.Label(cell_frame, text='Weather cell (e.g. L4):', fg='white', bg='black').grid(row=0, column=2)
+        weather_cell = tk.Entry(cell_frame, width=8, fg='white', bg='#222', insertbackground='white')
+        weather_cell.grid(row=0, column=3, padx=4)
+        try:
+            if 'weather_cell' in settings:
+                weather_cell.insert(0, settings.get('weather_cell'))
+            else:
+                col = settings.get('column', DEFAULT_SETTINGS['column'])
+                row = settings.get('weather_row', DEFAULT_SETTINGS['weather_row'])
+                def col_to_letters(n):
+                    s = ''
+                    while n > 0:
+                        n, r = divmod(n - 1, 26)
+                        s = chr(ord('A') + r) + s
+                    return s
+                weather_cell.insert(0, f"{col_to_letters(col)}{row}")
+        except Exception:
+            weather_cell.insert(0, f"L4")
+
+        tk.Label(cell_frame, text='Vehicle cell (e.g. L5):', fg='white', bg='black').grid(row=0, column=4)
+        vehicle_cell = tk.Entry(cell_frame, width=8, fg='white', bg='#222', insertbackground='white')
+        vehicle_cell.grid(row=0, column=5, padx=4)
+        try:
+            if 'vehicle_cell' in settings:
+                vehicle_cell.insert(0, settings.get('vehicle_cell'))
+            else:
+                col = settings.get('column', DEFAULT_SETTINGS['column'])
+                row = settings.get('vehicle_row', DEFAULT_SETTINGS['vehicle_row'])
+                def col_to_letters(n):
+                    s = ''
+                    while n > 0:
+                        n, r = divmod(n - 1, 26)
+                        s = chr(ord('A') + r) + s
+                    return s
+                vehicle_cell.insert(0, f"{col_to_letters(col)}{row}")
+        except Exception:
+            vehicle_cell.insert(0, f"L5")
+
+        # Manual buttons config
+        frame_buttons_cfg = tk.LabelFrame(win, text='Manual Go/No-Go (Buttons mode)', fg='white', bg='black')
+        frame_buttons_cfg.config(bg='black')
+        frame_buttons_cfg.pack(fill='x', padx=8, pady=6)
+
+        def set_manual(val_type, val):
+            # store on fetch_gonogo func for now
+            if val_type == 'range':
+                fetch_gonogo.manual_range = val
+            elif val_type == 'weather':
+                fetch_gonogo.manual_weather = val
+            elif val_type == 'vehicle':
+                fetch_gonogo.manual_vehicle = val
+
+        # helper to set manual and update UI from main app
+        def set_manual_and_update(val_type, val):
+            set_manual(val_type, val)
+            # update labels and write html
+            self.gonogo_values = fetch_gonogo()
+            # update GUI labels immediately
+            self.range_label.config(text=f"RANGE: {self.gonogo_values[0]}", fg=get_status_color(self.gonogo_values[0]))
+            self.weather_label.config(text=f"WEATHER: {self.gonogo_values[1]}", fg=get_status_color(self.gonogo_values[1]))
+            self.vehicle_label.config(text=f"VEHICLE: {self.gonogo_values[2]}", fg=get_status_color(self.gonogo_values[2]))
+            write_gonogo_html(self.gonogo_values)
+
+        # Save/Cancel
+        def cell_to_rc(cell_str):
+            s = (cell_str or '').strip().upper()
+            if not s:
+                return None, None
+            # split letters and digits
+            letters = ''
+            digits = ''
+            for ch in s:
+                if ch.isalpha():
+                    letters += ch
+                elif ch.isdigit():
+                    digits += ch
+            if not digits:
+                return None, None
+            # convert letters to number
+            col = 0
+            for ch in letters:
+                col = col * 26 + (ord(ch) - ord('A') + 1)
+            row = int(digits)
+            return row, col
+
+        def on_save():
+            # parse cells
+            r_row, r_col = cell_to_rc(range_cell.get())
+            w_row, w_col = cell_to_rc(weather_cell.get())
+            v_row, v_col = cell_to_rc(vehicle_cell.get())
+            # fallbacks
+            if r_row is None:
+                r_row = DEFAULT_SETTINGS['range_row']
+            if w_row is None:
+                w_row = DEFAULT_SETTINGS['weather_row']
+            if v_row is None:
+                v_row = DEFAULT_SETTINGS['vehicle_row']
+            # determine column to use (prefer range column, else weather, else vehicle, else default)
+            col_val = r_col or w_col or v_col or DEFAULT_SETTINGS['column']
+            new_settings = {
+                'mode': mode_var.get(),
+                'sheet_link': sheet_entry.get().strip() or SHEET_LINK,
+                'range_row': int(r_row),
+                'weather_row': int(w_row),
+                'vehicle_row': int(v_row),
+                'column': int(col_val),
+                # persist the textual cells for convenience
+                'range_cell': range_cell.get().strip().upper(),
+                'weather_cell': weather_cell.get().strip().upper(),
+                'vehicle_cell': vehicle_cell.get().strip().upper(),
+                # persist manual values if present
+                'manual_range': getattr(fetch_gonogo, 'manual_range', None),
+                'manual_weather': getattr(fetch_gonogo, 'manual_weather', None),
+                'manual_vehicle': getattr(fetch_gonogo, 'manual_vehicle', None)
+            }
+            save_settings(new_settings)
+            # update immediately
+            self.gonogo_values = fetch_gonogo()
+            write_gonogo_html(self.gonogo_values)
+            # update manual visibility in main UI
+            self.update_manual_visibility()
+            win.destroy()
+
+        def on_cancel():
+            win.destroy()
+
+        btn_frame = tk.Frame(win)
+        btn_frame = tk.Frame(win, bg='black')
+        btn_frame.pack(fill='x', pady=8)
+        tk.Button(btn_frame, text='Save', command=on_save, fg='white', bg='#333', activebackground='#444').pack(side='right', padx=8)
+        tk.Button(btn_frame, text='Cancel', command=on_cancel, fg='white', bg='#333', activebackground='#444').pack(side='right')
+
 
     # ----------------------------
     # Update input visibility based on mode
@@ -292,6 +557,61 @@ class CountdownApp:
             self.minutes_entry.config(state="disabled")
             self.seconds_entry.config(state="disabled")
             self.clock_entry.config(state="normal")
+
+    # ----------------------------
+    # Manual controls & helpers
+    # ----------------------------
+    def set_manual(self, which, val):
+        # normalize
+        v = (val or '').strip().upper()
+        if which == 'range':
+            fetch_gonogo.manual_range = v
+        elif which == 'weather':
+            fetch_gonogo.manual_weather = v
+        elif which == 'vehicle':
+            fetch_gonogo.manual_vehicle = v
+        # update GUI and HTML
+        self.gonogo_values = fetch_gonogo()
+        try:
+            self.range_label.config(text=f"RANGE: {self.gonogo_values[0]}", fg=get_status_color(self.gonogo_values[0]))
+            self.weather_label.config(text=f"WEATHER: {self.gonogo_values[1]}", fg=get_status_color(self.gonogo_values[1]))
+            self.vehicle_label.config(text=f"VEHICLE: {self.gonogo_values[2]}", fg=get_status_color(self.gonogo_values[2]))
+        except Exception:
+            pass
+        write_gonogo_html(self.gonogo_values)
+        # persist manual values immediately so they survive restarts
+        try:
+            s = load_settings()
+            s['manual_range'] = getattr(fetch_gonogo, 'manual_range', s.get('manual_range'))
+            s['manual_weather'] = getattr(fetch_gonogo, 'manual_weather', s.get('manual_weather'))
+            s['manual_vehicle'] = getattr(fetch_gonogo, 'manual_vehicle', s.get('manual_vehicle'))
+            save_settings(s)
+        except Exception:
+            pass
+
+    def update_manual_visibility(self):
+        s = load_settings()
+        mode = s.get('mode', 'spreadsheet')
+        visible = (mode == 'buttons')
+        # show or hide manual frame
+        if visible:
+            self.manual_frame.pack(pady=6)
+        else:
+            self.manual_frame.pack_forget()
+
+    def _toggle_manual(self, which):
+        # get current values (Range, Weather, Vehicle)
+        cur = fetch_gonogo()
+        # map which to index
+        idx_map = {'range': 0, 'weather': 1, 'vehicle': 2}
+        idx = idx_map.get(which, 0)
+        try:
+            cur_val = (cur[idx] or '').strip().upper()
+        except Exception:
+            cur_val = 'N/A'
+        # toggle: if GO -> NOGO, else -> GO
+        new_val = 'NOGO' if cur_val == 'GO' else 'GO'
+        self.set_manual(which, new_val)
 
     # ----------------------------
     # Control logic
