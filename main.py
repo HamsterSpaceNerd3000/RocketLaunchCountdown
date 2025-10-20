@@ -1,12 +1,16 @@
 import tkinter as tk
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import csv
 import io
 import os
 import json
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 
 # Get the user's Documents folder (cross-platform)
@@ -19,9 +23,9 @@ os.makedirs(app_folder, exist_ok=True)
 # Define file paths
 COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
 GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
-SHEET_LINK = "https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/export?format=csv&gid=855477916"
+SHEET_LINK = ""
 session = requests.Session()
-appVersion = "0.3.0"
+appVersion = "0.4.0"
 SETTINGS_FILE = os.path.join(app_folder, "settings.json")
 
 # Default settings
@@ -34,6 +38,14 @@ DEFAULT_SETTINGS = {
     "vehicle_row": 4,
     "column": 12  # 1-based column (default column 12 -> index 11)
 }
+# default timezone: 'local' uses system local tz, otherwise an IANA name or 'UTC'
+DEFAULT_SETTINGS.setdefault('timezone', 'local')
+
+# A small list of common timezone choices.
+TIMEZONE_CHOICES = [
+    'local', 'UTC', 'US/Eastern', 'US/Central', 'US/Mountain', 'US/Pacific',
+    'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'
+]
 
 
 def load_settings():
@@ -276,13 +288,21 @@ class CountdownApp:
         self.seconds_entry.insert(0, "0")
         self.seconds_entry.pack(side="left", padx=2)
 
-        # Clock time input
+        # Clock time input (separate HH, MM, SS boxes)
         frame_clock = tk.Frame(root, bg="black")
         frame_clock.pack(pady=5)
-        tk.Label(frame_clock, text="HH:MM", fg="white", bg="black").pack(side="left")
-        self.clock_entry = tk.Entry(frame_clock, width=7, font=("Arial", 18))
-        self.clock_entry.insert(0, "14:00")
-        self.clock_entry.pack(side="left", padx=5)
+        tk.Label(frame_clock, text="Clock (HH:MM:SS)", fg="white", bg="black").pack(side="left")
+        self.clock_hours_entry = tk.Entry(frame_clock, width=3, font=("Arial", 18), fg='white', bg='#111', insertbackground='white')
+        self.clock_hours_entry.insert(0, "14")
+        self.clock_hours_entry.pack(side="left", padx=2)
+        tk.Label(frame_clock, text=":", fg="white", bg="black").pack(side="left")
+        self.clock_minutes_entry = tk.Entry(frame_clock, width=3, font=("Arial", 18), fg='white', bg='#111', insertbackground='white')
+        self.clock_minutes_entry.insert(0, "00")
+        self.clock_minutes_entry.pack(side="left", padx=2)
+        tk.Label(frame_clock, text=":", fg="white", bg="black").pack(side="left")
+        self.clock_seconds_entry = tk.Entry(frame_clock, width=3, font=("Arial", 18), fg='white', bg='#111', insertbackground='white')
+        self.clock_seconds_entry.insert(0, "00")
+        self.clock_seconds_entry.pack(side="left", padx=2)
 
         # Control buttons
         frame_buttons = tk.Frame(root, bg="black")
@@ -363,7 +383,7 @@ class CountdownApp:
         win = tk.Toplevel(self.root)
         win.config(bg="black")
         win.title("Settings")
-        win.geometry("560x200")
+        win.geometry("560x250")
         win.transient(self.root)
 
         # Mode selection
@@ -453,6 +473,16 @@ class CountdownApp:
         frame_buttons_cfg.config(bg='black')
         frame_buttons_cfg.pack(fill='x', padx=8, pady=6)
 
+        # Timezone selector
+        tz_frame = tk.Frame(frame_sheet, bg='black')
+        tz_frame.pack(fill='x', padx=6, pady=4)
+        tk.Label(tz_frame, text='Timezone:', fg='white', bg='black').pack(side='left')
+        tz_var = tk.StringVar(value=settings.get('timezone', DEFAULT_SETTINGS.get('timezone', 'local')))
+        # OptionMenu with a few choices, but user may edit the text to any IANA name
+        tz_menu = tk.OptionMenu(tz_frame, tz_var, *TIMEZONE_CHOICES)
+        tz_menu.config(fg='white', bg='#222', activebackground='#333')
+        tz_menu.pack(side='left', padx=6)
+
         def set_manual(val_type, val):
             # store on fetch_gonogo func for now
             if val_type == 'range':
@@ -523,7 +553,8 @@ class CountdownApp:
                 # persist manual values if present
                 'manual_range': getattr(fetch_gonogo, 'manual_range', None),
                 'manual_weather': getattr(fetch_gonogo, 'manual_weather', None),
-                'manual_vehicle': getattr(fetch_gonogo, 'manual_vehicle', None)
+                'manual_vehicle': getattr(fetch_gonogo, 'manual_vehicle', None),
+                'timezone': tz_var.get()
             }
             save_settings(new_settings)
             # update immediately
@@ -551,12 +582,16 @@ class CountdownApp:
             self.hours_entry.config(state="normal")
             self.minutes_entry.config(state="normal")
             self.seconds_entry.config(state="normal")
-            self.clock_entry.config(state="disabled")
+            self.clock_hours_entry.config(state="disabled")
+            self.clock_minutes_entry.config(state="disabled")
+            self.clock_seconds_entry.config(state="disabled")
         else:
             self.hours_entry.config(state="disabled")
             self.minutes_entry.config(state="disabled")
             self.seconds_entry.config(state="disabled")
-            self.clock_entry.config(state="normal")
+            self.clock_hours_entry.config(state="normal")
+            self.clock_minutes_entry.config(state="normal")
+            self.clock_seconds_entry.config(state="normal")
 
     # ----------------------------
     # Manual controls & helpers
@@ -632,13 +667,36 @@ class CountdownApp:
                 total_seconds = h * 3600 + m * 60 + s
             else:
                 now = datetime.now()
-                parts = [int(p) for p in self.clock_entry.get().split(":")]
-                h, m = parts[0], parts[1]
-                s = parts[2] if len(parts) == 3 else 0
-                target_today = now.replace(hour=h, minute=m, second=s, microsecond=0)
-                if target_today < now:
-                    target_today = target_today.replace(day=now.day + 1)
-                total_seconds = (target_today - now).total_seconds()
+                # read separate HH, MM, SS boxes
+                h = int(self.clock_hours_entry.get() or 0)
+                m = int(self.clock_minutes_entry.get() or 0)
+                s = int(self.clock_seconds_entry.get() or 0)
+                # determine timezone from settings
+                ssettings = load_settings()
+                tzname = ssettings.get('timezone', DEFAULT_SETTINGS.get('timezone', 'local'))
+                if ZoneInfo is None or tzname in (None, '', 'local'):
+                    # naive local time handling (existing behavior) — use timedelta to roll day
+                    target_today = now.replace(hour=h, minute=m, second=s, microsecond=0)
+                    if target_today <= now:
+                        target_today = target_today + timedelta(days=1)
+                    total_seconds = (target_today - now).total_seconds()
+                else:
+                    try:
+                        tz = ZoneInfo(tzname)
+                        # construct aware "now" in that timezone and create the target time
+                        now_tz = datetime.now(tz)
+                        target = now_tz.replace(hour=h, minute=m, second=s, microsecond=0)
+                        # if target already passed in that tz, roll to next day
+                        if target <= now_tz:
+                            target = target + timedelta(days=1)
+                        # compute total seconds using aware-datetime subtraction to avoid epoch mixing
+                        total_seconds = (target - now_tz).total_seconds()
+                    except Exception:
+                        # fallback to naive local behavior
+                        target_today = now.replace(hour=h, minute=m, second=s, microsecond=0)
+                        if target_today <= now:
+                            target_today = target_today + timedelta(days=1)
+                        total_seconds = (target_today - now).total_seconds()
         except Exception:
             self.text.config(text="Invalid time")
             write_countdown_html(self.mission_name, "Invalid time")
