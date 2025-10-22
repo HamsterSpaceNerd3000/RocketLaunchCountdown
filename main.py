@@ -1,7 +1,9 @@
 import tkinter as tk
+from tkinter import colorchooser
 import time
 import threading
 from datetime import datetime, timedelta
+import re
 import requests
 import csv
 import io
@@ -11,7 +13,6 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
-
 
 # Get the user's Documents folder (cross-platform)
 documents_folder = os.path.join(os.path.expanduser("~"), "Documents")
@@ -25,28 +26,51 @@ COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
 GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
 SHEET_LINK = ""
 session = requests.Session()
-appVersion = "0.4.0"
+appVersion = "0.5.0"
 SETTINGS_FILE = os.path.join(app_folder, "settings.json")
 
 # Default settings
 DEFAULT_SETTINGS = {
-    "mode": "spreadsheet",  # or 'buttons'
+    "mode": "spreadsheet",
     "sheet_link": SHEET_LINK,
-    # rows are 1-based as shown in spreadsheet; default 2,3,4 -> indices 1,2,3
     "range_row": 2,
     "weather_row": 3,
     "vehicle_row": 4,
-    "column": 12  # 1-based column (default column 12 -> index 11)
+    "column": 12
 }
 # default timezone: 'local' uses system local tz, otherwise an IANA name or 'UTC'
 DEFAULT_SETTINGS.setdefault('timezone', 'local')
+
+# Appearance defaults
+DEFAULT_SETTINGS.setdefault('bg_color', '#000000')
+DEFAULT_SETTINGS.setdefault('text_color', '#FFFFFF')
+DEFAULT_SETTINGS.setdefault('font_family', 'Consolas')
+DEFAULT_SETTINGS.setdefault('mission_font_px', 24)
+DEFAULT_SETTINGS.setdefault('timer_font_px', 80)
+DEFAULT_SETTINGS.setdefault('gn_bg_color', '#111111')
+DEFAULT_SETTINGS.setdefault('gn_border_color', '#FFFFFF')
+DEFAULT_SETTINGS.setdefault('gn_go_color', '#00FF00')
+DEFAULT_SETTINGS.setdefault('gn_nogo_color', '#FF0000')
+DEFAULT_SETTINGS.setdefault('gn_font_px', 20)
+DEFAULT_SETTINGS.setdefault('appearance_mode', 'dark')
+
+# HTML-only appearance defaults (these should not affect the Python GUI)
+DEFAULT_SETTINGS.setdefault('html_bg_color', DEFAULT_SETTINGS.get('bg_color', '#000000'))
+DEFAULT_SETTINGS.setdefault('html_text_color', DEFAULT_SETTINGS.get('text_color', '#FFFFFF'))
+DEFAULT_SETTINGS.setdefault('html_font_family', DEFAULT_SETTINGS.get('font_family', 'Consolas'))
+DEFAULT_SETTINGS.setdefault('html_mission_font_px', DEFAULT_SETTINGS.get('mission_font_px', 24))
+DEFAULT_SETTINGS.setdefault('html_timer_font_px', DEFAULT_SETTINGS.get('timer_font_px', 80))
+DEFAULT_SETTINGS.setdefault('html_gn_bg_color', DEFAULT_SETTINGS.get('gn_bg_color', '#111111'))
+DEFAULT_SETTINGS.setdefault('html_gn_border_color', DEFAULT_SETTINGS.get('gn_border_color', '#FFFFFF'))
+DEFAULT_SETTINGS.setdefault('html_gn_go_color', DEFAULT_SETTINGS.get('gn_go_color', '#00FF00'))
+DEFAULT_SETTINGS.setdefault('html_gn_nogo_color', DEFAULT_SETTINGS.get('gn_nogo_color', '#FF0000'))
+DEFAULT_SETTINGS.setdefault('html_gn_font_px', DEFAULT_SETTINGS.get('gn_font_px', 20))
 
 # A small list of common timezone choices.
 TIMEZONE_CHOICES = [
     'local', 'UTC', 'US/Eastern', 'US/Central', 'US/Mountain', 'US/Pacific',
     'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'
 ]
-
 
 def load_settings():
     try:
@@ -58,7 +82,6 @@ def load_settings():
     # ensure default saved
     save_settings(DEFAULT_SETTINGS)
     return DEFAULT_SETTINGS.copy()
-
 
 def save_settings(s):
     try:
@@ -114,14 +137,42 @@ def fetch_gonogo():
 def get_status_color(status):
     """Return color name for a Go/No-Go status string."""
     try:
-        return "green" if str(status).strip().upper() == "GO" else "red"
+        s = str(status or '').strip().upper()
+        # normalize to letters only so variants like 'NO GO', 'NO-GO', 'NOGO' match
+        norm = re.sub(r'[^A-Z]', '', s)
+        if norm == 'GO':
+            return 'green'
+        if norm == 'NOGO':
+            return 'red'
+        # fallback: treat unknown/empty as white
+        return 'white'
     except Exception:
         return "white"
+
+
+def format_status_display(status):
+    try:
+        s = str(status or '').strip().upper()
+        norm = re.sub(r'[^A-Z]', '', s)
+        if norm == 'GO':
+            return 'GO'
+        if norm == 'NOGO':
+            return 'NO-GO'
+        return s
+    except Exception:
+        return str(status or '')
 
 # -------------------------
 # Write Countdown HTML
 # -------------------------
 def write_countdown_html(mission_name, timer_text):
+    s = load_settings()
+    # Prefer HTML-specific settings; fall back to GUI appearance settings for backwards compatibility
+    bg = s.get('html_bg_color', s.get('bg_color', '#000000'))
+    text = s.get('html_text_color', s.get('text_color', '#FFFFFF'))
+    font = s.get('html_font_family', s.get('font_family', 'Consolas, monospace'))
+    mission_px = int(s.get('html_mission_font_px', s.get('mission_font_px', 48)))
+    timer_px = int(s.get('html_timer_font_px', s.get('timer_font_px', 120)))
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -129,16 +180,16 @@ def write_countdown_html(mission_name, timer_text):
 <style>
 body {{
     margin: 0;
-    background-color: black;
+    background-color: {bg};
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    color: white;
-    font-family: Consolas, monospace;
+    color: {text};
+    font-family: {font};
 }}
-#mission {{ font-size: 4vw; margin-bottom: 0; }}
-#timer {{ font-size: 8vw; margin-bottom: 40px; }}
+#mission {{ font-size: {mission_px}px; margin-bottom: 0; }}
+#timer {{ font-size: {timer_px}px; margin-bottom: 40px; }}
 </style>
 <script>
 setTimeout(() => location.reload(), 1000);
@@ -158,6 +209,24 @@ setTimeout(() => location.reload(), 1000);
 def write_gonogo_html(gonogo_values=None):
     if gonogo_values is None:
         gonogo_values = ["N/A", "N/A", "N/A"]
+    s = load_settings()
+    # Prefer HTML-specific settings; fall back to GUI appearance settings for backwards compatibility
+    bg = s.get('html_bg_color', s.get('bg_color', '#000000'))
+    text = s.get('html_text_color', s.get('text_color', '#FFFFFF'))
+    font = s.get('html_font_family', s.get('font_family', 'Consolas, monospace'))
+    gn_bg = s.get('html_gn_bg_color', s.get('gn_bg_color', '#111111'))
+    gn_border = s.get('html_gn_border_color', s.get('gn_border_color', '#FFFFFF'))
+    gn_go = s.get('html_gn_go_color', s.get('gn_go_color', '#00FF00'))
+    gn_nogo = s.get('html_gn_nogo_color', s.get('gn_nogo_color', '#FF0000'))
+    gn_px = int(s.get('html_gn_font_px', s.get('gn_font_px', 28)))
+    # normalize and format display values so variants like 'NO GO' become 'NO-GO'
+    disp0 = format_status_display(gonogo_values[0])
+    disp1 = format_status_display(gonogo_values[1])
+    disp2 = format_status_display(gonogo_values[2])
+    n0 = re.sub(r'[^A-Z]', '', (str(gonogo_values[0] or '')).strip().upper())
+    n1 = re.sub(r'[^A-Z]', '', (str(gonogo_values[1] or '')).strip().upper())
+    n2 = re.sub(r'[^A-Z]', '', (str(gonogo_values[2] or '')).strip().upper())
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -165,9 +234,9 @@ def write_gonogo_html(gonogo_values=None):
 <style>
 body {{
     margin: 0;
-    background-color: black;
-    color: white;
-    font-family: Consolas, monospace;
+    background-color: {bg};
+    color: {text};
+    font-family: {font};
     display: flex;
     justify-content: center;
     align-items: center;
@@ -178,24 +247,24 @@ body {{
     gap: 40px;
 }}
 .status-box {{
-    border: 2px solid white;
+    border: 2px solid {gn_border};
     padding: 20px 40px;
-    font-size: 2.5vw;
+    font-size: {gn_px}px;
     text-align: center;
-    background-color: #111;
+    background-color: {gn_bg};
 }}
-.go {{ color: #0f0; }}
-.nogo {{ color: #f00; }}
+.go {{ color: {gn_go}; }}
+.nogo {{ color: {gn_nogo}; }}
 </style>
 <script>
 setTimeout(() => location.reload(), 5000);
 </script>
 </head>
 <body>
-<div id="gonogo">
-    <div class="status-box {'go' if gonogo_values[0].lower()=='go' else 'nogo'}">Range: {gonogo_values[0]}</div>
-    <div class="status-box {'go' if gonogo_values[2].lower()=='go' else 'nogo'}">Vehicle: {gonogo_values[2]}</div>
-    <div class="status-box {'go' if gonogo_values[1].lower()=='go' else 'nogo'}">Weather: {gonogo_values[1]}</div>
+    <div id="gonogo">
+    <div class="status-box {'go' if n0=='GO' else 'nogo'}">Range: {disp0}</div>
+    <div class="status-box {'go' if n2=='GO' else 'nogo'}">Vehicle: {disp2}</div>
+    <div class="status-box {'go' if n1=='GO' else 'nogo'}">Weather: {disp1}</div>
 </div>
 </body>
 </html>"""
@@ -227,7 +296,7 @@ class CountdownApp:
         self.last_gonogo_update = time.time()
 
         # Title
-        self.titletext = tk.Label(root, text="RocketLaunchCountdown", font=("Consolas", 24), fg="white", bg="black")
+        self.titletext = tk.Label(root, text=f"RocketLaunchCountdown {appVersion}", font=("Consolas", 24), fg="white", bg="black")
         self.titletext.pack(pady=(10, 0))
 
         # Display
@@ -325,8 +394,8 @@ class CountdownApp:
         self.reset_btn = tk.Button(frame_buttons, text="⟳ Reset", command=self.reset, font=("Arial", 14))
         self.reset_btn.grid(row=0, column=3, padx=5)
         # Settings button moved next to control buttons (match size/style)
-        settings_btn = tk.Button(frame_buttons, text="Settings", command=self.show_settings_window, font=("Arial", 14), width=10)
-        settings_btn.grid(row=0, column=4, padx=6)
+        self.settings_btn = tk.Button(frame_buttons, text="Settings", command=self.show_settings_window, font=("Arial", 14), width=10)
+        self.settings_btn.grid(row=0, column=4, padx=6)
 
         # Note: gonogo mode switching remains in Settings; manual buttons appear when mode == 'buttons'
 
@@ -372,6 +441,11 @@ class CountdownApp:
         self.update_inputs()
         # set initial manual button visibility from settings
         self.update_manual_visibility()
+        # Apply appearance settings at startup so the mission entry and other widgets reflect the saved mode
+        try:
+            self.apply_appearance_settings()
+        except Exception:
+            pass
         self.update_clock()
 
     # ----------------------------
@@ -379,37 +453,68 @@ class CountdownApp:
     # ----------------------------
     def show_settings_window(self):
         settings = load_settings()
-
         win = tk.Toplevel(self.root)
-        win.config(bg="black")
-        win.title("Settings")
-        win.geometry("560x250")
         win.transient(self.root)
+        win.title("Settings")
+        win.geometry("560x275")
+        # apply current appearance mode so the settings window matches the main UI
+        s_local = load_settings()
+        mode_local = s_local.get('appearance_mode', 'dark')
+        if mode_local == 'dark':
+            win_bg = '#000000'; win_text = '#FFFFFF'; btn_bg = '#FFFFFF'; btn_fg = '#000000'
+        else:
+            win_bg = '#FFFFFF'; win_text = '#000000'; btn_bg = '#000000'; btn_fg = '#FFFFFF'
+        win.config(bg=win_bg)
+        # set per-window widget defaults so nested widgets inherit the chosen theme
+        try:
+            win.option_add('*Foreground', win_text)
+            win.option_add('*Background', win_bg)
+            # entry specific defaults
+            win.option_add('*Entry.Background', '#222' if mode_local == 'dark' else '#b4b4b4')
+            win.option_add('*Entry.Foreground', win_text if mode_local == 'dark' else '#000000')
+        except Exception:
+            pass
+        # keep track of this Toplevel so other dialogs can close it if needed
+        try:
+            self.settings_win = win
+            def _clear_settings_ref(evt=None):
+                try:
+                    self.settings_win = None
+                except Exception:
+                    pass
+            win.bind('<Destroy>', _clear_settings_ref)
+        except Exception:
+            pass
 
         # Mode selection
         frame_mode = tk.Frame(win)
-        frame_mode.config(bg="black")
+        frame_mode.config(bg=win_bg)
         frame_mode.pack(fill='x', pady=8, padx=8)
-        tk.Label(frame_mode, text="Mode:", fg="white", bg="black").pack(side='left')
+        tk.Label(frame_mode, text="Mode:", fg=win_text, bg=win_bg).pack(side='left')
         mode_var = tk.StringVar(value=settings.get('mode', 'spreadsheet'))
-        tk.Radiobutton(frame_mode, text='Spreadsheet', variable=mode_var, value='spreadsheet', fg="white", bg="black", selectcolor="black").pack(side='left', padx=8)
-        tk.Radiobutton(frame_mode, text='Buttons (manual)', variable=mode_var, value='buttons', fg="white", bg="black", selectcolor="black").pack(side='left', padx=8)
+        tk.Radiobutton(frame_mode, text='Spreadsheet', variable=mode_var, value='spreadsheet', fg=win_text, bg=win_bg, selectcolor=win_bg).pack(side='left', padx=8)
+        tk.Radiobutton(frame_mode, text='Buttons (manual)', variable=mode_var, value='buttons', fg=win_text, bg=win_bg, selectcolor=win_bg).pack(side='left', padx=8)
 
         # Spreadsheet config
-        frame_sheet = tk.LabelFrame(win, text='Spreadsheet configuration', fg='white', bg='black')
-        frame_sheet.config(bg="black")
+        frame_sheet = tk.LabelFrame(win, text='Spreadsheet configuration', fg=win_text, bg=win_bg)
+        frame_sheet.config(bg=win_bg)
         frame_sheet.pack(fill='x', padx=8, pady=6)
-        tk.Label(frame_sheet, text='Sheet link (CSV export):', fg='white', bg='black').pack(anchor='w')
-        sheet_entry = tk.Entry(frame_sheet, width=80, fg='white', bg='#222', insertbackground='white')
+        tk.Label(frame_sheet, text='Sheet link (CSV export):', fg=win_text, bg=win_bg).pack(anchor='w')
+        # entry background chosen to contrast with window background
+        sheet_entry_bg = '#222' if mode_local == 'dark' else '#b4b4b4'
+        sheet_entry_fg = win_text if mode_local == 'dark' else '#000000'
+        sheet_entry = tk.Entry(frame_sheet, width=80, fg=sheet_entry_fg, bg=sheet_entry_bg, insertbackground=sheet_entry_fg)
         sheet_entry.pack(fill='x', padx=6, pady=4)
         sheet_entry.insert(0, settings.get('sheet_link', SHEET_LINK))
 
         # Accept cells in 'L3' format for each parameter
         cell_frame = tk.Frame(frame_sheet)
-        cell_frame.config(bg="black")
+        cell_frame.config(bg=win_bg)
         cell_frame.pack(fill='x', padx=6, pady=2)
-        tk.Label(cell_frame, text='Range cell (e.g. L3):', fg='white', bg='black').grid(row=0, column=0)
-        range_cell = tk.Entry(cell_frame, width=8, fg='white', bg='#222', insertbackground='white')
+        tk.Label(cell_frame, text='Range cell (e.g. L3):', fg=win_text, bg=win_bg).grid(row=0, column=0)
+        range_cell_bg = '#222' if mode_local == 'dark' else '#b4b4b4'
+        range_cell_fg = win_text if mode_local == 'dark' else '#000000'
+        range_cell = tk.Entry(cell_frame, width=8, fg=range_cell_fg, bg=range_cell_bg, insertbackground=range_cell_fg)
         range_cell.grid(row=0, column=1, padx=4)
         # show as L3 if present, otherwise build from numeric settings
         try:
@@ -430,8 +535,8 @@ class CountdownApp:
         except Exception:
             range_cell.insert(0, f"L3")
 
-        tk.Label(cell_frame, text='Weather cell (e.g. L4):', fg='white', bg='black').grid(row=0, column=2)
-        weather_cell = tk.Entry(cell_frame, width=8, fg='white', bg='#222', insertbackground='white')
+        tk.Label(cell_frame, text='Weather cell (e.g. L4):', fg=win_text, bg=win_bg).grid(row=0, column=2)
+        weather_cell = tk.Entry(cell_frame, width=8, fg=range_cell_fg, bg=range_cell_bg, insertbackground=range_cell_fg)
         weather_cell.grid(row=0, column=3, padx=4)
         try:
             if 'weather_cell' in settings:
@@ -449,8 +554,8 @@ class CountdownApp:
         except Exception:
             weather_cell.insert(0, f"L4")
 
-        tk.Label(cell_frame, text='Vehicle cell (e.g. L5):', fg='white', bg='black').grid(row=0, column=4)
-        vehicle_cell = tk.Entry(cell_frame, width=8, fg='white', bg='#222', insertbackground='white')
+        tk.Label(cell_frame, text='Vehicle cell (e.g. L5):', fg=win_text, bg=win_bg).grid(row=0, column=4)
+        vehicle_cell = tk.Entry(cell_frame, width=8, fg=range_cell_fg, bg=range_cell_bg, insertbackground=range_cell_fg)
         vehicle_cell.grid(row=0, column=5, padx=4)
         try:
             if 'vehicle_cell' in settings:
@@ -469,18 +574,23 @@ class CountdownApp:
             vehicle_cell.insert(0, f"L5")
 
         # Manual buttons config
-        frame_buttons_cfg = tk.LabelFrame(win, text='Manual Go/No-Go (Buttons mode)', fg='white', bg='black')
-        frame_buttons_cfg.config(bg='black')
+        frame_buttons_cfg = tk.LabelFrame(win, text='Manual Go/No-Go (Buttons mode)', fg=win_text, bg=win_bg)
+        frame_buttons_cfg.config(bg=win_bg)
         frame_buttons_cfg.pack(fill='x', padx=8, pady=6)
 
+        # Appearance settings are in a separate window
+        frame_appearance_btn = tk.Frame(win, bg=win_bg)
+        frame_appearance_btn.pack(fill='x', padx=8, pady=6)
+        tk.Button(frame_appearance_btn, text='Appearance...', command=lambda: self.show_appearance_window(), fg=btn_fg, bg=btn_bg, activebackground='#444').pack(side='left')
+
         # Timezone selector
-        tz_frame = tk.Frame(frame_sheet, bg='black')
+        tz_frame = tk.Frame(frame_sheet, bg=win_bg)
         tz_frame.pack(fill='x', padx=6, pady=4)
-        tk.Label(tz_frame, text='Timezone:', fg='white', bg='black').pack(side='left')
+        tk.Label(tz_frame, text='Timezone:', fg=win_text, bg=win_bg).pack(side='left')
         tz_var = tk.StringVar(value=settings.get('timezone', DEFAULT_SETTINGS.get('timezone', 'local')))
         # OptionMenu with a few choices, but user may edit the text to any IANA name
         tz_menu = tk.OptionMenu(tz_frame, tz_var, *TIMEZONE_CHOICES)
-        tz_menu.config(fg='white', bg='#222', activebackground='#333')
+        tz_menu.config(fg=win_text, bg=range_cell_bg, activebackground='#333')
         tz_menu.pack(side='left', padx=6)
 
         def set_manual(val_type, val):
@@ -554,24 +664,45 @@ class CountdownApp:
                 'manual_range': getattr(fetch_gonogo, 'manual_range', None),
                 'manual_weather': getattr(fetch_gonogo, 'manual_weather', None),
                 'manual_vehicle': getattr(fetch_gonogo, 'manual_vehicle', None),
-                'timezone': tz_var.get()
+                'timezone': tz_var.get(),
+                # preserve appearance settings (edited in Appearance window)
+                'bg_color': settings.get('bg_color', '#000000'),
+                'text_color': settings.get('text_color', '#FFFFFF'),
+                'gn_bg_color': settings.get('gn_bg_color', '#111111'),
+                'gn_border_color': settings.get('gn_border_color', '#FFFFFF'),
+                'gn_go_color': settings.get('gn_go_color', '#00FF00'),
+                'gn_nogo_color': settings.get('gn_nogo_color', '#FF0000'),
+                'font_family': settings.get('font_family', 'Consolas'),
+                'mission_font_px': int(settings.get('mission_font_px', 48)),
+                'timer_font_px': int(settings.get('timer_font_px', 120)),
+                'gn_font_px': int(settings.get('gn_font_px', 28))
             }
+            # preserve the appearance_mode so saving Settings doesn't accidentally remove it
+            try:
+                new_settings['appearance_mode'] = settings.get('appearance_mode', DEFAULT_SETTINGS.get('appearance_mode', 'dark'))
+            except Exception:
+                new_settings['appearance_mode'] = DEFAULT_SETTINGS.get('appearance_mode', 'dark')
             save_settings(new_settings)
             # update immediately
             self.gonogo_values = fetch_gonogo()
             write_gonogo_html(self.gonogo_values)
             # update manual visibility in main UI
             self.update_manual_visibility()
+            # appearance changes are applied only from the Appearance window
             win.destroy()
 
         def on_cancel():
             win.destroy()
 
-        btn_frame = tk.Frame(win)
-        btn_frame = tk.Frame(win, bg='black')
+        btn_frame = tk.Frame(win, bg=win_bg)
         btn_frame.pack(fill='x', pady=8)
-        tk.Button(btn_frame, text='Save', command=on_save, fg='white', bg='#333', activebackground='#444').pack(side='right', padx=8)
-        tk.Button(btn_frame, text='Cancel', command=on_cancel, fg='white', bg='#333', activebackground='#444').pack(side='right')
+        tk.Button(btn_frame, text='Save', command=on_save, fg=btn_fg, bg=btn_bg, activebackground='#444').pack(side='right', padx=8)
+        tk.Button(btn_frame, text='Cancel', command=on_cancel, fg=btn_fg, bg=btn_bg, activebackground='#444').pack(side='right')
+        # ensure the new toplevel gets recursively themed like the main window
+        try:
+            self._theme_recursive(win, win_bg, win_text, btn_bg, btn_fg)
+        except Exception:
+            pass
 
 
     # ----------------------------
@@ -634,6 +765,436 @@ class CountdownApp:
         else:
             self.manual_frame.pack_forget()
 
+    def apply_appearance_settings(self):
+        """Apply appearance-related settings to the running Tk UI."""
+        s = load_settings()
+        # If an appearance_mode preset is selected, override specific settings with the preset
+        mode = s.get('appearance_mode', None)
+        if mode == 'dark':
+            s.update({
+                'bg_color': '#000000', 'text_color': '#FFFFFF', 'gn_bg_color': '#111111',
+                'gn_border_color': '#FFFFFF', 'gn_go_color': '#00FF00', 'gn_nogo_color': '#FF0000',
+                'font_family': 'Consolas', 'mission_font_px': 44, 'timer_font_px': 80, 'gn_font_px': 24
+            })
+        elif mode == 'light':
+            s.update({
+                'bg_color': '#FFFFFF', 'text_color': '#000000', 'gn_bg_color': '#EEEEEE',
+                'gn_border_color': '#333333', 'gn_go_color': '#008800', 'gn_nogo_color': '#AA0000',
+                'font_family': 'Consolas', 'mission_font_px': 44, 'timer_font_px': 80, 'gn_font_px': 24
+            })
+        bg = s.get('bg_color', '#000000')
+        text = s.get('text_color', '#FFFFFF')
+        font_family = s.get('font_family', 'Consolas')
+        timer_px = int(s.get('timer_font_px', 100))
+        mission_px = int(s.get('mission_font_px', 48))
+        gn_px = int(s.get('gn_font_px', 24))
+        gn_bg = s.get('gn_bg_color', '#111111')
+        gn_border = s.get('gn_border_color', '#FFFFFF')
+        gn_go = s.get('gn_go_color', '#00FF00')
+        gn_nogo = s.get('gn_nogo_color', '#FF0000')
+        # apply to main window elements
+        try:
+            self.root.config(bg=bg)
+            self.titletext.config(fg=text, bg=bg, font=(font_family, 20))
+            # timer label
+            self.text.config(fg=text, bg=bg, font=(font_family, timer_px, 'bold'))
+            # GN labels: set bg and font, and color depending on GO/NOGO
+            def style_gn_label(lbl, value):
+                try:
+                    lbl.config(bg=bg, font=(font_family, gn_px))
+                    v = (value or '').strip().upper()
+                    if v == 'GO':
+                        lbl.config(fg=gn_go)
+                    elif v in ('NOGO', 'NO-GO'):
+                        lbl.config(fg=gn_nogo)
+                    else:
+                        lbl.config(fg=text)
+                except Exception:
+                    pass
+
+            style_gn_label(self.range_label, getattr(self, 'range_status', None))
+            style_gn_label(self.weather_label, getattr(self, 'weather', None))
+            style_gn_label(self.vehicle_label, getattr(self, 'vehicle', None))
+
+            # Buttons: invert colors depending on mode
+            # dark mode -> buttons white bg, black text
+            # light mode -> buttons black bg, white text
+            if mode == 'dark':
+                btn_bg = '#FFFFFF'
+                btn_fg = '#000000'
+                active_bg = '#DDDDDD'
+            else:
+                btn_bg = '#000000'
+                btn_fg = '#FFFFFF'
+                active_bg = '#222222'
+
+            for btn in (self.start_btn, self.hold_btn, self.resume_btn, self.scrub_btn, self.reset_btn, self.settings_btn):
+                try:
+                    # preserve scrub button's custom color (red) if set
+                    try:
+                        cur_fg = btn.cget('fg')
+                    except Exception:
+                        cur_fg = None
+                    if btn is getattr(self, 'scrub_btn', None) and cur_fg:
+                        # keep existing foreground (usually red)
+                        btn.config(bg=btn_bg, activebackground=active_bg)
+                    else:
+                        btn.config(bg=btn_bg, fg=btn_fg, activebackground=active_bg)
+                except Exception:
+                    pass
+
+            # Manual toggle buttons
+            for btn in (self.range_toggle_btn, self.weather_toggle_btn, self.vehicle_toggle_btn):
+                try:
+                    btn.config(bg=btn_bg, fg=btn_fg)
+                except Exception:
+                    pass
+
+            # manual frame and footer
+            try:
+                self.manual_frame.config(bg=bg)
+                # Footer should invert colors depending on mode:
+                # - dark mode -> white background, black text
+                # - light mode -> black background, white text
+                mode = s.get('appearance_mode', 'dark')
+                if mode == 'dark':
+                    footer_bg = '#FFFFFF'
+                    footer_fg = '#000000'
+                else:
+                    footer_bg = '#000000'
+                    footer_fg = '#FFFFFF'
+                try:
+                    self.footer_label.config(bg=footer_bg, fg=footer_fg)
+                except Exception:
+                    # fall back to generic theme
+                    self.footer_label.config(bg=bg, fg=text)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # Recursively theme frames and common widgets so no frame is left with old colors
+        try:
+            self._theme_recursive(self.root, bg, text, btn_bg, btn_fg)
+        except Exception:
+            pass
+
+    def update_gn_labels(self, range_val, weather_val, vehicle_val):
+        """Update GN label texts and apply theme-aware styling."""
+        s = load_settings()
+        gn_px = int(s.get('gn_font_px', 28))
+        font_family = s.get('font_family', 'Consolas')
+        bg = s.get('bg_color', '#000000')
+        text = s.get('text_color', '#FFFFFF')
+        gn_go = s.get('gn_go_color', '#00FF00')
+        gn_nogo = s.get('gn_nogo_color', '#FF0000')
+        # Range
+        try:
+            display_range = format_status_display(range_val)
+            self.range_label.config(text=f"RANGE: {display_range}", bg=bg, font=(font_family, gn_px))
+            rv = (range_val or '').strip().upper()
+            rnorm = re.sub(r'[^A-Z]', '', rv)
+            if rnorm == 'GO':
+                self.range_label.config(fg=gn_go)
+            elif rnorm == 'NOGO':
+                self.range_label.config(fg=gn_nogo)
+            else:
+                self.range_label.config(fg=text)
+        except Exception:
+            pass
+
+        # Weather
+        try:
+            display_weather = format_status_display(weather_val)
+            self.weather_label.config(text=f"WEATHER: {display_weather}", bg=bg, font=(font_family, gn_px))
+            wv = (weather_val or '').strip().upper()
+            wnorm = re.sub(r'[^A-Z]', '', wv)
+            if wnorm == 'GO':
+                self.weather_label.config(fg=gn_go)
+            elif wnorm == 'NOGO':
+                self.weather_label.config(fg=gn_nogo)
+            else:
+                self.weather_label.config(fg=text)
+        except Exception:
+            pass
+
+        # Vehicle
+        try:
+            display_vehicle = format_status_display(vehicle_val)
+            self.vehicle_label.config(text=f"VEHICLE: {display_vehicle}", bg=bg, font=(font_family, gn_px))
+            vv = (vehicle_val or '').strip().upper()
+            vnorm = re.sub(r'[^A-Z]', '', vv)
+            if vnorm == 'GO':
+                self.vehicle_label.config(fg=gn_go)
+            elif vnorm == 'NOGO':
+                self.vehicle_label.config(fg=gn_nogo)
+            else:
+                self.vehicle_label.config(fg=text)
+        except Exception:
+            pass
+
+    def _theme_recursive(self, widget, bg, text, btn_bg, btn_fg):
+        # load settings so we can theme GN label backgrounds if configured
+        s = load_settings()
+        for child in widget.winfo_children():
+            # Frame and LabelFrame
+            try:
+                if isinstance(child, (tk.Frame, tk.LabelFrame)):
+                    try:
+                        child.config(bg=bg)
+                    except Exception:
+                        pass
+                # Labels: set bg, but don't override GN label fg
+                if isinstance(child, tk.Label):
+                    try:
+                        # preserve GN label fg colors and don't override the footer label (it has a special inverted style)
+                        if child in (getattr(self, 'range_label', None), getattr(self, 'weather_label', None), getattr(self, 'vehicle_label', None)):
+                            # GN labels keep fg but should have themed bg
+                            child.config(bg=s.get('gn_bg_color', bg))
+                        elif child is getattr(self, 'footer_label', None):
+                            # footer_label was already styled by apply_appearance_settings; don't override it here
+                            pass
+                        else:
+                            child.config(bg=bg, fg=text)
+                    except Exception:
+                        pass
+                # Entries: avoid overriding entries that were explicitly styled (like mission_entry)
+                if isinstance(child, tk.Entry):
+                    try:
+                        # Set entry bg/fg depending on appearance mode
+                        mode_local = s.get('appearance_mode', 'dark')
+                        if mode_local == 'dark':
+                            child.config(bg='#222222', fg=text, insertbackground=text)
+                        else:
+                            # light mode entries should contrast with the white background
+                            child.config(bg='#b4b4b4', fg='#000000', insertbackground='#000000')
+                    except Exception:
+                        pass
+                # OptionMenu/Menubutton
+                if isinstance(child, tk.Menubutton):
+                    try:
+                        child.config(bg=btn_bg, fg=btn_fg, activebackground='#555')
+                    except Exception:
+                        pass
+                # Radiobutton / Checkbutton
+                if isinstance(child, (tk.Radiobutton, tk.Checkbutton)):
+                    try:
+                        # selectcolor is the indicator background; set it to match the overall bg for neatness
+                        child.config(bg=bg, fg=text, selectcolor=bg, activebackground=bg)
+                    except Exception:
+                        pass
+                # Buttons: ensure themed background and correct fg
+                if isinstance(child, tk.Button):
+                    try:
+                        # don't override scrub button's fg if it has a special color
+                        if child is getattr(self, 'scrub_btn', None):
+                            child.config(bg=btn_bg, activebackground='#555')
+                        else:
+                            child.config(bg=btn_bg, fg=btn_fg, activebackground='#555')
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # Recurse
+            try:
+                if hasattr(child, 'winfo_children'):
+                    self._theme_recursive(child, bg, text, btn_bg, btn_fg)
+            except Exception:
+                pass
+
+    def show_appearance_window(self):
+        # Re-implemented appearance window with proper theming and layout
+        settings = load_settings()
+        win = tk.Toplevel(self.root)
+        win.transient(self.root)
+        win.title('Appearance')
+        win.geometry('520x450')
+
+        # derive colors from appearance_mode so the dialog matches the main UI
+        mode_local = settings.get('appearance_mode', 'dark')
+        if mode_local == 'dark':
+            win_bg = '#000000'; win_text = '#FFFFFF'; btn_bg = '#FFFFFF'; btn_fg = '#000000'; entry_bg = '#222'; entry_fg = '#FFFFFF'
+        else:
+            win_bg = '#FFFFFF'; win_text = '#000000'; btn_bg = '#000000'; btn_fg = '#FFFFFF'; entry_bg = '#b4b4b4'; entry_fg = '#000000'
+        win.config(bg=win_bg)
+
+        tk.Label(win, text='Choose UI mode:', fg=win_text, bg=win_bg).pack(anchor='w', padx=12, pady=(10,0))
+        mode_var = tk.StringVar(value=settings.get('appearance_mode', 'dark'))
+        modes = ['dark', 'light']
+        mode_menu = tk.OptionMenu(win, mode_var, *modes)
+        mode_menu.config(fg=win_text, bg=entry_bg, activebackground='#333')
+        mode_menu.pack(anchor='w', padx=12, pady=6)
+
+        def on_save_mode():
+            choice = mode_var.get()
+            presets = {
+                'dark': {
+                    'bg_color': '#000000', 'text_color': '#FFFFFF', 'gn_bg_color': '#111111',
+                    'gn_border_color': '#FFFFFF', 'gn_go_color': '#00FF00', 'gn_nogo_color': '#FF0000',
+                    'font_family': 'Consolas', 'mission_font_px': 24, 'timer_font_px': 80, 'gn_font_px': 20
+                },
+                'light': {
+                    'bg_color': '#FFFFFF', 'text_color': '#000000', 'gn_bg_color': '#EEEEEE',
+                    'gn_border_color': '#333333', 'gn_go_color': '#008800', 'gn_nogo_color': '#AA0000',
+                    'font_family': 'Consolas', 'mission_font_px': 24, 'timer_font_px': 80, 'gn_font_px': 20
+                }
+            }
+            p = presets.get(choice, {})
+            s = load_settings()
+            s['appearance_mode'] = choice
+            s.update(p)
+            save_settings(s)
+            try:
+                self.apply_appearance_settings()
+                write_countdown_html(self.mission_name, self.text.cget('text'))
+                write_gonogo_html(self.gonogo_values)
+            except Exception:
+                pass
+            # close appearance window
+            win.destroy()
+            # also close the settings window if it is open
+            try:
+                if getattr(self, 'settings_win', None):
+                    try:
+                        self.settings_win.destroy()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        def choose_color(entry_widget):
+            try:
+                col = colorchooser.askcolor()
+                if col and col[1]:
+                    entry_widget.delete(0, tk.END)
+                    entry_widget.insert(0, col[1])
+            except Exception:
+                pass
+
+        s = load_settings()
+        html_frame = tk.LabelFrame(win, text='HTML appearance (streaming)', fg=win_text, bg=win_bg)
+        html_frame.config(bg=win_bg)
+        html_frame.pack(fill='x', padx=8, pady=6)
+
+        # layout HTML appearance fields in a grid
+        tk.Label(html_frame, text='Background:', fg=win_text, bg=win_bg).grid(row=0, column=0, sticky='w', padx=6, pady=4)
+        bg_entry = tk.Entry(html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        bg_entry.grid(row=0, column=1, padx=6, pady=4)
+        bg_entry.insert(0, s.get('html_bg_color', s.get('bg_color', '#000000')))
+        tk.Button(html_frame, text='Choose', command=lambda: choose_color(bg_entry), fg=btn_fg, bg=btn_bg).grid(row=0, column=2, padx=6)
+
+        tk.Label(html_frame, text='Text:', fg=win_text, bg=win_bg).grid(row=1, column=0, sticky='w', padx=6, pady=4)
+        text_entry = tk.Entry(html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        text_entry.grid(row=1, column=1, padx=6, pady=4)
+        text_entry.insert(0, s.get('html_text_color', s.get('text_color', '#FFFFFF')))
+        tk.Button(html_frame, text='Choose', command=lambda: choose_color(text_entry), fg=btn_fg, bg=btn_bg).grid(row=1, column=2, padx=6)
+
+        tk.Label(html_frame, text='GN GO:', fg=win_text, bg=win_bg).grid(row=2, column=0, sticky='w', padx=6, pady=4)
+        gn_go_entry = tk.Entry(html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        gn_go_entry.grid(row=2, column=1, padx=6, pady=4)
+        gn_go_entry.insert(0, s.get('html_gn_go_color', s.get('gn_go_color', '#00FF00')))
+        tk.Button(html_frame, text='Choose', command=lambda: choose_color(gn_go_entry), fg=btn_fg, bg=btn_bg).grid(row=2, column=2, padx=6)
+
+        tk.Label(html_frame, text='GN NO-GO:', fg=win_text, bg=win_bg).grid(row=3, column=0, sticky='w', padx=6, pady=4)
+        gn_nogo_entry = tk.Entry(html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        gn_nogo_entry.grid(row=3, column=1, padx=6, pady=4)
+        gn_nogo_entry.insert(0, s.get('html_gn_nogo_color', s.get('gn_nogo_color', '#FF0000')))
+        tk.Button(html_frame, text='Choose', command=lambda: choose_color(gn_nogo_entry), fg=btn_fg, bg=btn_bg).grid(row=3, column=2, padx=6)
+
+        tk.Label(html_frame, text='GN box bg:', fg=win_text, bg=win_bg).grid(row=4, column=0, sticky='w', padx=6, pady=4)
+        gn_box_bg_entry = tk.Entry(html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        gn_box_bg_entry.grid(row=4, column=1, padx=6, pady=4)
+        gn_box_bg_entry.insert(0, s.get('html_gn_bg_color', s.get('gn_bg_color', '#111111')))
+        tk.Button(html_frame, text='Choose', command=lambda: choose_color(gn_box_bg_entry), fg=btn_fg, bg=btn_bg).grid(row=4, column=2, padx=6)
+
+        tk.Label(html_frame, text='GN border:', fg=win_text, bg=win_bg).grid(row=5, column=0, sticky='w', padx=6, pady=4)
+        gn_border_entry = tk.Entry(html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        gn_border_entry.grid(row=5, column=1, padx=6, pady=4)
+        gn_border_entry.insert(0, s.get('html_gn_border_color', s.get('gn_border_color', '#FFFFFF')))
+        tk.Button(html_frame, text='Choose', command=lambda: choose_color(gn_border_entry), fg=btn_fg, bg=btn_bg).grid(row=5, column=2, padx=6)
+
+        tk.Label(html_frame, text='Font family:', fg=win_text, bg=win_bg).grid(row=6, column=0, sticky='w', padx=6, pady=4)
+        font_entry = tk.Entry(html_frame, width=20, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        font_entry.grid(row=6, column=1, padx=6, pady=4, columnspan=2, sticky='w')
+        font_entry.insert(0, s.get('html_font_family', s.get('font_family', 'Consolas')))
+
+        tk.Label(html_frame, text='Mission px:', fg=win_text, bg=win_bg).grid(row=7, column=0, sticky='w', padx=6, pady=4)
+        mission_px_entry = tk.Entry(html_frame, width=6, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        mission_px_entry.grid(row=7, column=1, padx=6, pady=4, sticky='w')
+        mission_px_entry.insert(0, str(s.get('html_mission_font_px', s.get('mission_font_px', 24))))
+
+        tk.Label(html_frame, text='Timer px:', fg=win_text, bg=win_bg).grid(row=8, column=0, sticky='w', padx=6, pady=4)
+        timer_px_entry = tk.Entry(html_frame, width=6, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg)
+        timer_px_entry.grid(row=8, column=1, padx=6, pady=4, sticky='w')
+        timer_px_entry.insert(0, str(s.get('html_timer_font_px', s.get('timer_font_px', 80))))
+
+        def save_html_prefs():
+            try:
+                s_local = load_settings()
+                s_local['html_bg_color'] = bg_entry.get().strip() or s_local.get('html_bg_color')
+                s_local['html_text_color'] = text_entry.get().strip() or s_local.get('html_text_color')
+                s_local['html_gn_go_color'] = gn_go_entry.get().strip() or s_local.get('html_gn_go_color')
+                s_local['html_gn_nogo_color'] = gn_nogo_entry.get().strip() or s_local.get('html_gn_nogo_color')
+                s_local['html_gn_bg_color'] = gn_box_bg_entry.get().strip() or s_local.get('html_gn_bg_color')
+                s_local['html_gn_border_color'] = gn_border_entry.get().strip() or s_local.get('html_gn_border_color')
+                s_local['html_font_family'] = font_entry.get().strip() or s_local.get('html_font_family')
+                try:
+                    s_local['html_mission_font_px'] = int(mission_px_entry.get())
+                except Exception:
+                    pass
+                try:
+                    s_local['html_timer_font_px'] = int(timer_px_entry.get())
+                except Exception:
+                    pass
+                save_settings(s_local)
+                write_countdown_html(self.mission_name, self.text.cget('text'))
+                write_gonogo_html(self.gonogo_values)
+            except Exception:
+                pass
+
+        def reset_html_defaults():
+            try:
+                s_local = load_settings()
+                s_local['html_bg_color'] = DEFAULT_SETTINGS.get('html_bg_color')
+                s_local['html_text_color'] = DEFAULT_SETTINGS.get('html_text_color')
+                s_local['html_font_family'] = DEFAULT_SETTINGS.get('html_font_family')
+                s_local['html_mission_font_px'] = DEFAULT_SETTINGS.get('html_mission_font_px')
+                s_local['html_timer_font_px'] = DEFAULT_SETTINGS.get('html_timer_font_px')
+                s_local['html_gn_bg_color'] = DEFAULT_SETTINGS.get('html_gn_bg_color')
+                s_local['html_gn_border_color'] = DEFAULT_SETTINGS.get('html_gn_border_color')
+                s_local['html_gn_go_color'] = DEFAULT_SETTINGS.get('html_gn_go_color')
+                s_local['html_gn_nogo_color'] = DEFAULT_SETTINGS.get('html_gn_nogo_color')
+                s_local['html_gn_font_px'] = DEFAULT_SETTINGS.get('html_gn_font_px')
+                save_settings(s_local)
+                # update UI fields
+                bg_entry.delete(0, tk.END); bg_entry.insert(0, s_local['html_bg_color'])
+                text_entry.delete(0, tk.END); text_entry.insert(0, s_local['html_text_color'])
+                gn_go_entry.delete(0, tk.END); gn_go_entry.insert(0, s_local['html_gn_go_color'])
+                gn_nogo_entry.delete(0, tk.END); gn_nogo_entry.insert(0, s_local['html_gn_nogo_color'])
+                gn_box_bg_entry.delete(0, tk.END); gn_box_bg_entry.insert(0, s_local['html_gn_bg_color'])
+                gn_border_entry.delete(0, tk.END); gn_border_entry.insert(0, s_local['html_gn_border_color'])
+                font_entry.delete(0, tk.END); font_entry.insert(0, s_local['html_font_family'])
+                mission_px_entry.delete(0, tk.END); mission_px_entry.insert(0, str(s_local['html_mission_font_px']))
+                timer_px_entry.delete(0, tk.END); timer_px_entry.insert(0, str(s_local['html_timer_font_px']))
+                write_countdown_html(self.mission_name, self.text.cget('text'))
+                write_gonogo_html(self.gonogo_values)
+            except Exception:
+                pass
+
+        html_btns = tk.Frame(html_frame, bg=win_bg)
+        html_btns.grid(row=9, column=0, columnspan=3, pady=6)
+        tk.Button(html_btns, text='Save (HTML only)', command=save_html_prefs, fg=btn_fg, bg=btn_bg).pack(side='right', padx=6)
+        tk.Button(html_btns, text='Reset HTML defaults', command=reset_html_defaults, fg=btn_fg, bg=btn_bg).pack(side='right')
+
+        btn_frame = tk.Frame(win, bg=win_bg)
+        btn_frame.pack(fill='x', pady=8, padx=8)
+        tk.Button(btn_frame, text='Save', command=on_save_mode, fg=btn_fg, bg=btn_bg).pack(side='right', padx=6)
+        tk.Button(btn_frame, text='Cancel', command=win.destroy, fg=btn_fg, bg=btn_bg).pack(side='right')
+
+        try:
+            self._theme_recursive(win, win_bg, win_text, btn_bg, btn_fg)
+        except Exception:
+            pass
+
     def _toggle_manual(self, which):
         # get current values (Range, Weather, Vehicle)
         cur = fetch_gonogo()
@@ -645,7 +1206,7 @@ class CountdownApp:
         except Exception:
             cur_val = 'N/A'
         # toggle: if GO -> NOGO, else -> GO
-        new_val = 'NOGO' if cur_val == 'GO' else 'GO'
+        new_val = 'NO-GO' if cur_val == 'GO' else 'GO'
         self.set_manual(which, new_val)
 
     # ----------------------------
@@ -781,9 +1342,14 @@ class CountdownApp:
         if now_time - self.last_gonogo_update > 0.1:
             # fetch_gonogo returns [Range, Weather, Vehicle]
             self.range_status, self.weather, self.vehicle = fetch_gonogo()
-            self.range_label.config(text=f"RANGE: {self.range_status}", fg=get_status_color(self.range_status))
-            self.weather_label.config(text=f"WEATHER: {self.weather}", fg=get_status_color(self.weather))
-            self.vehicle_label.config(text=f"VEHICLE: {self.vehicle}", fg=get_status_color(self.vehicle))
+            # update texts and styles using theme
+            try:
+                self.update_gn_labels(self.range_status, self.weather, self.vehicle)
+            except Exception:
+                # fallback to simple config
+                self.range_label.config(text=f"RANGE: {self.range_status}")
+                self.weather_label.config(text=f"WEATHER: {self.weather}")
+                self.vehicle_label.config(text=f"VEHICLE: {self.vehicle}")
             self.gonogo_values = [self.range_status, self.weather, self.vehicle]
             write_gonogo_html(self.gonogo_values)
             self.last_gonogo_update = now_time
@@ -816,12 +1382,22 @@ if __name__ == "__main__":
         footer_frame = tk.Frame(splash, bg="black")
         footer_frame.pack(side="bottom", pady=0, fill="x")
 
+        # Footer uses inverted colors: white bg/black text in dark mode, black bg/white text in light mode
+        s = load_settings()
+        splash_mode = s.get('appearance_mode', 'dark')
+        if splash_mode == 'dark':
+            splash_footer_bg = '#FFFFFF'
+            splash_footer_fg = '#000000'
+        else:
+            splash_footer_bg = '#000000'
+            splash_footer_fg = '#FFFFFF'
+
         footer_label = tk.Label(
             footer_frame,
-            text="Made by HamsterSpaceNerd3000",  # or whatever you want
+            text="Made by HamsterSpaceNerd3000",
             font=("Consolas", 12),
-            fg="black",
-            bg="white"
+            fg=splash_footer_fg,
+            bg=splash_footer_bg
         )
         footer_label.pack(fill="x")
 
@@ -847,9 +1423,24 @@ if __name__ == "__main__":
                 if init_state['error']:
                     info.config(text=f"Initialization error: {init_state['error']}")
                 else:
-                    info.config(text="Ready. You may open browser sources now, then click Continue.")
-                    cont_btn.config(state="normal")
-                    splash.after(5000, on_continue)
+                    # show a visible countdown before auto-start; allow Continue to skip
+                    AUTO_START_SECONDS = 5
+                    remaining = AUTO_START_SECONDS
+                    cont_btn.config(state='normal')
+
+                    def tick():
+                        nonlocal remaining
+                        if remaining <= 0:
+                            on_continue()
+                            return
+                        info.config(text=f"Ready — auto-starting in {remaining}...")
+                        cont_btn.config(text=f"Continue ({remaining})")
+                        remaining -= 1
+                        splash.after(1000, tick)
+
+                    # clicking Continue will immediately proceed
+                    cont_btn.config(command=on_continue)
+                    tick()
                 return
             splash.after(200, check_init)
 
@@ -860,7 +1451,6 @@ if __name__ == "__main__":
             app = CountdownApp(root)
             root.mainloop()
 
-        cont_btn.config(command=on_continue)
         # begin polling
         splash.after(100, check_init)
         splash.mainloop()
