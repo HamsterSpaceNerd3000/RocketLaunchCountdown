@@ -26,7 +26,7 @@ COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
 GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
 SHEET_LINK = ""
 session = requests.Session()
-appVersion = "0.5.0"
+appVersion = "0.6.0"
 SETTINGS_FILE = os.path.join(app_folder, "settings.json")
 
 # Default settings
@@ -65,6 +65,9 @@ DEFAULT_SETTINGS.setdefault('html_gn_border_color', DEFAULT_SETTINGS.get('gn_bor
 DEFAULT_SETTINGS.setdefault('html_gn_go_color', DEFAULT_SETTINGS.get('gn_go_color', '#00FF00'))
 DEFAULT_SETTINGS.setdefault('html_gn_nogo_color', DEFAULT_SETTINGS.get('gn_nogo_color', '#FF0000'))
 DEFAULT_SETTINGS.setdefault('html_gn_font_px', DEFAULT_SETTINGS.get('gn_font_px', 20))
+
+# Auto-hold times: list of seconds before T at which timer should automatically enter hold
+DEFAULT_SETTINGS.setdefault('auto_hold_times', [])
 
 # A small list of common timezone choices.
 TIMEZONE_CHOICES = [
@@ -294,6 +297,8 @@ class CountdownApp:
         # fetch_gonogo() returns [Range, Weather, Vehicle] to match gonogo.html writer
         self.gonogo_values = fetch_gonogo()
         self.last_gonogo_update = time.time()
+        # track which auto-holds we've already triggered for the current run
+        self._auto_hold_triggered = set()
 
         # Title
         self.titletext = tk.Label(root, text=f"RocketLaunchCountdown {appVersion}", font=("Consolas", 24), fg="white", bg="black")
@@ -356,6 +361,76 @@ class CountdownApp:
         self.seconds_entry = tk.Entry(frame_duration, width=3, font=("Arial", 18))
         self.seconds_entry.insert(0, "0")
         self.seconds_entry.pack(side="left", padx=2)
+
+        # Auto-hold quick button (opens H/M/S dialog)
+        def open_autohold_dialog():
+            dlg = tk.Toplevel(self.root)
+            dlg.transient(self.root)
+            dlg.title('Set Auto-hold')
+            dlg.geometry('320x110')
+            # theme according to appearance mode
+            ssettings = load_settings()
+            mode_local = ssettings.get('appearance_mode', DEFAULT_SETTINGS.get('appearance_mode', 'dark'))
+            if mode_local == 'dark':
+                dlg_bg = '#000000'; dlg_fg = '#FFFFFF'; entry_bg = '#222222'; btn_bg = '#FFFFFF'; btn_fg = '#000000'
+            else:
+                dlg_bg = '#FFFFFF'; dlg_fg = '#000000'; entry_bg = '#b4b4b4'; btn_bg = '#000000'; btn_fg = '#FFFFFF'
+            dlg.config(bg=dlg_bg)
+            tk.Label(dlg, text='Auto-hold time (H M S):', fg=dlg_fg, bg=dlg_bg).pack(pady=(6,0))
+            box = tk.Frame(dlg, bg=dlg_bg)
+            box.pack(pady=6)
+            h_entry = tk.Entry(box, width=3, font=('Arial', 12), bg=entry_bg, fg=dlg_fg, insertbackground=dlg_fg)
+            m_entry = tk.Entry(box, width=3, font=('Arial', 12), bg=entry_bg, fg=dlg_fg, insertbackground=dlg_fg)
+            s_entry = tk.Entry(box, width=3, font=('Arial', 12), bg=entry_bg, fg=dlg_fg, insertbackground=dlg_fg)
+            h_entry.pack(side='left', padx=4)
+            tk.Label(box, text='H', fg=dlg_fg, bg=dlg_bg).pack(side='left')
+            m_entry.pack(side='left', padx=4)
+            tk.Label(box, text='M', fg=dlg_fg, bg=dlg_bg).pack(side='left')
+            s_entry.pack(side='left', padx=4)
+            tk.Label(box, text='S', fg=dlg_fg, bg=dlg_bg).pack(side='left')
+
+            # populate with first configured value if present
+            try:
+                ssettings = load_settings()
+                a = (ssettings.get('auto_hold_times') or [])
+                if a:
+                    secs = int(a[0])
+                    hh = secs // 3600; mm = (secs % 3600) // 60; ss = secs % 60
+                    h_entry.insert(0, str(hh)); m_entry.insert(0, str(mm)); s_entry.insert(0, str(ss))
+            except Exception:
+                pass
+
+            def do_save():
+                try:
+                    hh = int(h_entry.get() or 0)
+                    mm = int(m_entry.get() or 0)
+                    ss = int(s_entry.get() or 0)
+                    total = max(0, hh*3600 + mm*60 + ss)
+                except Exception:
+                    total = 0
+                try:
+                    ssettings = load_settings()
+                    # replace with single auto-hold time (list with one element)
+                    ssettings['auto_hold_times'] = [int(total)] if total > 0 else []
+                    save_settings(ssettings)
+                    # update runtime set so this run will consider the new value
+                    self._auto_hold_triggered = set()
+                except Exception:
+                    pass
+                dlg.destroy()
+
+            btnf = tk.Frame(dlg, bg=dlg_bg)
+            btnf.pack(fill='x', pady=6)
+            tk.Button(btnf, text='Save', command=do_save, width=10, bg=btn_bg, fg=btn_fg, activebackground='#444').pack(side='right', padx=6)
+            tk.Button(btnf, text='Cancel', command=dlg.destroy, width=10, bg=btn_bg, fg=btn_fg, activebackground='#444').pack(side='right')
+
+            # recursively theme dialog to ensure consistency
+            try:
+                self._theme_recursive(dlg, dlg_bg, dlg_fg, btn_bg, btn_fg)
+            except Exception:
+                pass
+
+        tk.Button(frame_duration, text='Auto-hold...', command=open_autohold_dialog, fg='white', bg='#333', width=12).pack(side='left', padx=8)
 
         # Clock time input (separate HH, MM, SS boxes)
         frame_clock = tk.Frame(root, bg="black")
@@ -578,6 +653,8 @@ class CountdownApp:
         frame_buttons_cfg.config(bg=win_bg)
         frame_buttons_cfg.pack(fill='x', padx=8, pady=6)
 
+        # (Auto-hold configuration removed from Settings — managed from main UI)
+
         # Appearance settings are in a separate window
         frame_appearance_btn = tk.Frame(win, bg=win_bg)
         frame_appearance_btn.pack(fill='x', padx=8, pady=6)
@@ -677,6 +754,8 @@ class CountdownApp:
                 'timer_font_px': int(settings.get('timer_font_px', 120)),
                 'gn_font_px': int(settings.get('gn_font_px', 28))
             }
+            # Auto-hold editing removed from Settings window; keep existing settings value
+            new_settings['auto_hold_times'] = settings.get('auto_hold_times', [])
             # preserve the appearance_mode so saving Settings doesn't accidentally remove it
             try:
                 new_settings['appearance_mode'] = settings.get('appearance_mode', DEFAULT_SETTINGS.get('appearance_mode', 'dark'))
@@ -1321,6 +1400,19 @@ class CountdownApp:
                 timer_text = self.format_time(elapsed, "H+")
             elif self.target_time:
                 diff = int(self.target_time - now_time)
+                # auto-hold detection: if configured times include this remaining value, enter hold
+                try:
+                    s = load_settings()
+                    ah = set(int(x) for x in s.get('auto_hold_times', []) or [])
+                except Exception:
+                    ah = set()
+                if diff in ah and diff not in getattr(self, '_auto_hold_triggered', set()):
+                    # trigger hold
+                    self._auto_hold_triggered.add(diff)
+                    self.hold()
+                    # show_hold_button/other UI changes handled by hold()
+                    # After entering hold, update countdown display via next tick
+                
                 if diff <= 0 and not self.counting_up:
                     self.counting_up = True
                     self.target_time = now_time
