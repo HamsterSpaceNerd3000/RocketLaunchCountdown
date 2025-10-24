@@ -36,7 +36,8 @@ DEFAULT_SETTINGS = {
     "range_row": 2,
     "weather_row": 3,
     "vehicle_row": 4,
-    "column": 12
+    "column": 12,
+    "hide_mission_name": False,
 }
 # default timezone: 'local' uses system local tz, otherwise an IANA name or 'UTC'
 DEFAULT_SETTINGS.setdefault('timezone', 'local')
@@ -176,6 +177,11 @@ def write_countdown_html(mission_name, timer_text):
     font = s.get('html_font_family', s.get('font_family', 'Consolas, monospace'))
     mission_px = int(s.get('html_mission_font_px', s.get('mission_font_px', 48)))
     timer_px = int(s.get('html_timer_font_px', s.get('timer_font_px', 120)))
+    
+    # Mission name hidden setting
+    hide_mission_name = s.get("hide_mission_name", False)
+    mission_div_hidden = f'<div id="mission">{mission_name}</div>' if not hide_mission_name else ''
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -199,7 +205,7 @@ setTimeout(() => location.reload(), 1000);
 </script>
 </head>
 <body>
-<div id="mission">{mission_name}</div>
+{mission_div_hidden}
 <div id="timer">{timer_text}</div>
 </body>
 </html>"""
@@ -1086,7 +1092,7 @@ class CountdownApp:
         win = tk.Toplevel(self.root)
         win.transient(self.root)
         win.title('Appearance')
-        win.geometry('520x450')
+        win.geometry('520x475')
 
         # derive colors from appearance_mode so the dialog matches the main UI
         mode_local = settings.get('appearance_mode', 'dark')
@@ -1206,6 +1212,12 @@ class CountdownApp:
         timer_px_entry.grid(row=8, column=1, padx=6, pady=4, sticky='w')
         timer_px_entry.insert(0, str(s.get('html_timer_font_px', s.get('timer_font_px', 80))))
 
+        # Add a checkbox to hide mission name in HTML output
+        self.hide_mission_name_var = tk.BooleanVar(value=s.get("hide_mission_name", False))
+        hide_mission_name_cb = tk.Checkbutton(html_frame, text="Hide mission name in HTML output", variable=self.hide_mission_name_var, fg=win_text, bg=win_bg, selectcolor=win_bg, activebackground=win_bg)
+
+        hide_mission_name_cb.grid(row=9, column=0, columnspan=3, sticky='w', padx=6, pady=4)
+        
         def save_html_prefs():
             try:
                 s_local = load_settings()
@@ -1216,6 +1228,7 @@ class CountdownApp:
                 s_local['html_gn_bg_color'] = gn_box_bg_entry.get().strip() or s_local.get('html_gn_bg_color')
                 s_local['html_gn_border_color'] = gn_border_entry.get().strip() or s_local.get('html_gn_border_color')
                 s_local['html_font_family'] = font_entry.get().strip() or s_local.get('html_font_family')
+                s_local["hide_mission_name"] = self.hide_mission_name_var.get()
                 try:
                     s_local['html_mission_font_px'] = int(mission_px_entry.get())
                 except Exception:
@@ -1260,7 +1273,7 @@ class CountdownApp:
                 pass
 
         html_btns = tk.Frame(html_frame, bg=win_bg)
-        html_btns.grid(row=9, column=0, columnspan=3, pady=6)
+        html_btns.grid(row=10, column=0, columnspan=3, pady=6)
         tk.Button(html_btns, text='Save (HTML only)', command=save_html_prefs, fg=btn_fg, bg=btn_bg).pack(side='right', padx=6)
         tk.Button(html_btns, text='Reset HTML defaults', command=reset_html_defaults, fg=btn_fg, bg=btn_bg).pack(side='right')
 
