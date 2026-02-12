@@ -1,2496 +1,355 @@
-import tkinter as tk
-from tkinter import colorchooser
-import time
-import threading
-from datetime import datetime, timedelta
-import re
-import requests
-import csv
-import io
-import os
-import json
+# RLCs main operating file. It pulls the countdown info from that script and pulls setting etc. It handles all of the GUI, but pulls information from other scripts.
 
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    ZoneInfo = None
+# Imports
+import dearpygui.dearpygui as dpg
+import settings
+from datetime import datetime
+import countdown_handler as ch
 
-# Get the user's Documents folder (cross-platform)
-documents_folder = os.path.join(os.path.expanduser("~"), "Documents")
+# DPG init
+dpg.create_context()
 
-# Create your app folder inside Documents
-app_folder = os.path.join(documents_folder, "RocketLaunchCountdown")
-os.makedirs(app_folder, exist_ok=True)
+version = "0.8.0"
 
-# Define file paths
-COUNTDOWN_HTML = os.path.join(app_folder, "countdown.html")
-GONOGO_HTML = os.path.join(app_folder, "gonogo.html")
-SHEET_LINK = ""
-session = requests.Session()
-appVersion = "0.7.0"
-SETTINGS_FILE = os.path.join(app_folder, "settings.json")
-
-concerns_list = []
-
-# Default settings
-DEFAULT_SETTINGS = {
-    "mode": "spreadsheet",
-    "sheet_link": SHEET_LINK,
-    "range_row": 2,
-    "weather_row": 3,
-    "vehicle_row": 4,
-    "major_concerns_row": 9,
-    "column": 12,
-    "hide_mission_name": True
-}
-# default timezone: 'local' uses system local tz, otherwise an IANA name or 'UTC'
-DEFAULT_SETTINGS.setdefault("timezone", "local")
-
-# Appearance defaults
-DEFAULT_SETTINGS.setdefault("bg_color", "#000000")
-DEFAULT_SETTINGS.setdefault("text_color", "#FFFFFF")
-DEFAULT_SETTINGS.setdefault("font_family", "Consolas")
-DEFAULT_SETTINGS.setdefault("mission_font_px", 24)
-DEFAULT_SETTINGS.setdefault("timer_font_px", 80)
-DEFAULT_SETTINGS.setdefault("gn_bg_color", "#111111")
-DEFAULT_SETTINGS.setdefault("gn_border_color", "#FFFFFF")
-DEFAULT_SETTINGS.setdefault("gn_go_color", "#00FF00")
-DEFAULT_SETTINGS.setdefault("gn_nogo_color", "#FF0000")
-DEFAULT_SETTINGS.setdefault("gn_caution_color", "#FFA500")  # orange
-DEFAULT_SETTINGS.setdefault("html_gn_caution_color", "#FFA500")
-DEFAULT_SETTINGS.setdefault("gn_font_px", 20)
-DEFAULT_SETTINGS.setdefault("appearance_mode", "dark")
-
-# HTML-only appearance defaults (these should not affect the Python GUI)
-DEFAULT_SETTINGS.setdefault(
-    "html_bg_color", DEFAULT_SETTINGS.get("bg_color", "#000000")
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_text_color", DEFAULT_SETTINGS.get("text_color", "#FFFFFF")
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_font_family", DEFAULT_SETTINGS.get("font_family", "Consolas")
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_mission_font_px", DEFAULT_SETTINGS.get("mission_font_px", 24)
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_timer_font_px", DEFAULT_SETTINGS.get("timer_font_px", 80)
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_gn_bg_color", DEFAULT_SETTINGS.get("gn_bg_color", "#111111")
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_gn_border_color", DEFAULT_SETTINGS.get("gn_border_color", "#FFFFFF")
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_gn_go_color", DEFAULT_SETTINGS.get("gn_go_color", "#00FF00")
-)
-DEFAULT_SETTINGS.setdefault(
-    "html_gn_nogo_color", DEFAULT_SETTINGS.get("gn_nogo_color", "#FF0000")
-)
-DEFAULT_SETTINGS.setdefault("html_gn_font_px", DEFAULT_SETTINGS.get("gn_font_px", 20))
-
-# Auto-hold times: list of seconds before T at which timer should automatically enter hold
-DEFAULT_SETTINGS.setdefault("auto_hold_times", [])
-
-DEFAULT_SETTINGS.setdefault("major_concerns_cell", "L9")
-
-# How often (seconds) to refresh major concerns from the sheet
-DEFAULT_SETTINGS.setdefault("concerns_update_interval", 2)
-
-# A small list of common timezone choices.
-TIMEZONE_CHOICES = [
-    "local",
-    "UTC",
-    "US/Eastern",
-    "US/Central",
-    "US/Mountain",
-    "US/Pacific",
-    "Europe/London",
-    "Europe/Paris",
-    "Asia/Tokyo",
-    "Australia/Sydney",
-]
-
-
-def load_settings():
-    try:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as fh:
-                loaded = json.load(fh)
-                # Merge loaded settings with defaults so missing keys get sane values
-                merged = DEFAULT_SETTINGS.copy()
-                if isinstance(loaded, dict):
-                    merged.update(loaded)
-                return merged
-    except Exception:
-        pass
-    # ensure default saved
-    save_settings(DEFAULT_SETTINGS)
-    return DEFAULT_SETTINGS.copy()
-
-
-def save_settings(s):
-    try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
-            json.dump(s, fh, indent=2)
-    except Exception:
-        pass
-
-
-# -------------------------
-# Fetch Go/No-Go Data
-# -------------------------
-def fetch_gonogo():
-    """Fetch Go/No-Go parameters either from configured spreadsheet or return manual button values."""
-    settings = load_settings()
-    mode = settings.get("mode", "spreadsheet")
-    # If manual mode, read values from a runtime stash (set by the GUI buttons)
-    if mode == "buttons":
-        # stored values will be on the function object (set by the GUI dialog/buttons)
-        try:
-            range_val = getattr(fetch_gonogo, "manual_range", "N/A")
-            weather_val = getattr(fetch_gonogo, "manual_weather", "N/A")
-            vehicle_val = getattr(fetch_gonogo, "manual_vehicle", "N/A")
-
-            # If values are numeric strings or numbers, we keep them numeric (so formatting + coloring works)
-            # convert empty strings -> "N/A"
-            def normv(v):
-                if v is None:
-                    return "N/A"
-                s = str(v).strip()
-                if s == "":
-                    return "N/A"
-                return s
-
-            return [normv(range_val), normv(weather_val), normv(vehicle_val)]
-        except Exception:
-            return ["N/A", "N/A", "N/A"]
-
-
-
-    # spreadsheet mode
-    link = settings.get("sheet_link", SHEET_LINK)
-    col = max(1, int(settings.get("column", 12))) - 1
-    rows = [
-        int(settings.get("range_row", 2)) - 1,
-        int(settings.get("weather_row", 3)) - 1,
-        int(settings.get("vehicle_row", 4)) - 1,
-    ]
-    try:
-        resp = session.get(link, timeout=3)
-        resp.raise_for_status()
-        reader = csv.reader(io.StringIO(resp.text))
-        data = list(reader)
-        gonogo = []
-        for r in rows:
-            val = "N/A"
-            if 0 <= r < len(data) and len(data[r]) > col:
-                val = data[r][col]
-            gonogo.append(val.strip().upper())
-        return gonogo
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch Go/No-Go from sheet: {e}")
-        return ["ERROR", "ERROR", "ERROR"]
-
-
-def get_status_color(status):
-    """
-    Accepts status which may be:
-      - a percentage string/number (e.g. '82', '82.0', 82)
-      - 'GO', 'NO-GO', 'CAUTION' or variants
-      - anything else -> white
-    Returns CSS color names / hex strings.
-    """
-    try:
-        if status is None:
-            return "white"
-        s = str(status).strip()
-        # Try numeric percentage first
-        try:
-            pct = float(s.replace("%", ""))
-
-            # Bound it to 0..100
-            pct = max(0.0, min(100.0, pct))
-            if pct >= 75.0:
-                return "green"
-            if pct >= 50.0:
-                return "orange"
-            return "red"
-        except Exception:
-            pass
-
-        # Non-numeric: interpret standard words
-        norm = re.sub(r"[^A-Z]", "", s.upper())
-        if norm == "GO":
-            return "green"
-        if norm == "NOGO" or norm == "NOGO" or norm == "NOGO":
-            return "red"
-        if norm == "CAUTION" or norm == "CAUT":
-            return "orange"
-        return "white"
-    except Exception:
-        return "white"
-
-
-def format_status_display(status):
-    """
-    Formats the status for display:
-    - numeric -> 'NN%' (rounded as needed)
-    - 'NO-GO'/'GO' -> canonical formatting
-    - otherwise return original string
-    """
-    try:
-        if status is None:
-            return "N/A"
-        s = str(status).strip()
-        # numeric
-        try:
-            pct = float(s)
-            # bound and show as integer if whole, else one decimal
-            pct = max(0.0, min(100.0, pct))
-            if abs(pct - round(pct)) < 0.001:
-                return f"{int(round(pct))}%"
-            return f"{pct:.1f}%"
-        except Exception:
-            pass
-
-        # canonical text forms
-        norm = re.sub(r"[^A-Z]", "", s.upper())
-        if norm == "GO":
-            return "GO"
-        if norm == "NOGO":
-            return "NO-GO"
-        if norm == "CAUTION":
-            return "CAUTION"
-        # fallback to raw
-        return s
-    except Exception:
-        return str(status or "")
-
-
-def fetch_major_concerns_from_sheet():
-    """Fetch major concerns from the same CSV sheet used by fetch_gonogo().
-
-    Returns a list of non-empty strings. This mirrors the safe access
-    pattern in `fetch_gonogo()`:
-      - uses `session.get()` to fetch the CSV
-      - respects `major_concerns_cell` (A1-style) if configured
-      - splits multi-item cell values on newlines or semicolons
-      - falls back to `major_concerns_row` and returns non-empty cells from that row
-    """
-    settings = load_settings()
-    link = settings.get("sheet_link", SHEET_LINK)
-    cell_ref = settings.get("major_concerns_cell", "").upper().strip()
-
-    def col_letters_to_index(letters):
-        result = 0
-        for c in letters:
-            result = result * 26 + (ord(c.upper()) - ord('A') + 1)
-        return result - 1
-
-    try:
-        resp = session.get(link, timeout=3)
-        resp.raise_for_status()
-        reader = csv.reader(io.StringIO(resp.text))
-        data = list(reader)
-
-        try:
-            print(f"[DEBUG] fetch_major_concerns_from_sheet: cell={cell_ref!r}, rows={len(data)}")
-        except Exception:
-            pass
-
-        concerns = []
-
-        if cell_ref:
-            # allow multiple cell refs separated by comma/semicolon/whitespace, e.g. "L9, L10"
-            tokens = [t.strip() for t in re.split(r"[;,\s]+", cell_ref) if t.strip()]
-            for tok in tokens:
-                m = re.match(r"^([A-Z]+)(\d+)$", tok)
-                if not m:
-                    continue
-                col_letters, row_str = m.groups()
-                row_idx = int(row_str) - 1
-                col_idx = col_letters_to_index(col_letters)
-                if 0 <= row_idx < len(data):
-                    row = data[row_idx]
-                    if 0 <= col_idx < len(row):
-                        val = row[col_idx].strip()
-                        if val:
-                            # split cell contents on newline, semicolon or comma into separate concerns
-                            parts = re.split(r"[\r\n,;]+", val)
-                            for p in parts:
-                                p = p.strip()
-                                if p:
-                                    concerns.append(p)
-
-        # fallback: use configured major_concerns_row
-        if not concerns:
-            row_idx = int(settings.get("major_concerns_row", DEFAULT_SETTINGS.get("major_concerns_row", 9))) - 1
-            if 0 <= row_idx < len(data):
-                concerns = [c.strip() for c in data[row_idx] if c.strip()]
-
-        return concerns if concerns else ["No concerns listed"]
-
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch major concerns from sheet: {e}")
-        return ["ERROR fetching concerns"]
-
-
-def fetch_major_concerns():
-    """Compatibility wrapper for existing callers.
-
-    Calls `fetch_major_concerns_from_sheet()` so other parts of the code
-    that expect `fetch_major_concerns()` continue to work.
-    """
-    try:
-        return fetch_major_concerns_from_sheet()
-    except Exception:
-        return ["ERROR fetching concerns"]
-    
-
-
-
-def write_major_concerns_html(concerns_list=None):
-    if concerns_list is None:
-        concerns_list = []
-
-    s = load_settings()
-    bg = s.get("html_bg_color", s.get("bg_color", "#000000"))
-    text = s.get("html_text_color", s.get("text_color", "#FFFFFF"))
-    font = s.get("html_font_family", s.get("font_family", "Consolas, monospace"))
-    font_size = s.get("html_mission_font_px", 32)  # adjust size for concerns
-
-    # Build HTML for the concerns
-    concerns_html = ""
-    if concerns_list:
-        concerns_html += "<ul style='list-style-type: disc; padding-left: 40px; text-align: left;'>\n"
-        for concern in concerns_list:
-            concerns_html += f"  <li>{concern}</li>\n"
-        concerns_html += "</ul>\n"
-    else:
-        concerns_html = "<p>No major concerns</p>"
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="refresh" content="5">
-<style>
-body {{
-    margin: 0;
-    background-color: {bg};
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    color: {text};
-    font-family: {font};
-    font-size: {font_size}px;
-}}
-ul {{
-    margin: 0;
-}}
-</style>
-</head>
-<body>
-<h2>Major Concerns</h2>
-{concerns_html}
-</body>
-</html>"""
-
-    concerns_file = os.path.join(app_folder, "major_concerns.html")
-    with open(concerns_file, "w", encoding="utf-8") as f:
-        f.write(html)
-
-
-def write_countdown_html(mission_name, timer_text):
-    s = load_settings()
-    # Prefer HTML-specific settings; fall back to GUI appearance settings for backwards compatibility
-    bg = s.get("html_bg_color", s.get("bg_color", "#000000"))
-    text = s.get("html_text_color", s.get("countdown_text_color", "#FFFFFF"))
-    font = s.get("html_font_family", s.get("font_family", "Consolas, monospace"))
-    mission_px = int(s.get("html_mission_font_px", s.get("mission_font_px", 48)))
-    timer_px = int(s.get("html_timer_font_px", s.get("timer_font_px", 120)))
-
-    # Mission name hidden setting
-    hide_mission_name = s.get("hide_mission_name", False)
-    mission_div_hidden = (
-        f'<div id="mission">{mission_name}</div>' if not hide_mission_name else ""
-    )
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="refresh" content="1">
-<style>
-body {{
-    margin: 0;
-    background-color: {bg};
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    color: {text};
-    font-family: {font};
-}}
-#mission {{ font-size: {mission_px}px; margin-bottom: 0; }}
-#timer {{ font-size: {timer_px}px; margin-bottom: 40px; }}
-</style>
-</head>
-<body>
-{mission_div_hidden}
-<div id="timer">{timer_text}</div>
-</body>
-</html>"""
-    with open(COUNTDOWN_HTML, "w", encoding="utf-8") as f:
-        f.write(html)
-
-
-def write_gonogo_html(gonogo_values=None):
-    if gonogo_values is None:
-        gonogo_values = ["N/A", "N/A", "N/A"]
-    s = load_settings()
-    bg = s.get("html_bg_color", s.get("bg_color", "#000000"))
-    text = s.get("html_text_color", s.get("text_color", "#FFFFFF"))
-    font = s.get("html_font_family", s.get("font_family", "Consolas, monospace"))
-    gn_bg = s.get("html_gn_bg_color", s.get("gn_bg_color", "#111111"))
-    gn_border = s.get("html_gn_border_color", s.get("gn_border_color", "#FFFFFF"))
-    gn_px = int(s.get("html_gn_font_px", s.get("gn_font_px", 28)))
-
-    # Prepare display text and color for each item
-    disp = [format_status_display(v) for v in gonogo_values]
-
-    def pick_css_color(v):
-        return get_status_color(v)
-
-    c0 = pick_css_color(gonogo_values[0])
-    c1 = pick_css_color(gonogo_values[1])
-    c2 = pick_css_color(gonogo_values[2])
-
-    # Inline style approach per box to ensure color picks up numeric/word cases
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-body {{
-    margin: 0;
-    background-color: {bg};
-    color: {text};
-    font-family: {font};
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-}}
-#gonogo {{
-    display: flex;
-    gap: 40px;
-}}
-.status-box {{
-    border: 2px solid {gn_border};
-    padding: 20px 40px;
-    font-size: {gn_px}px;
-    text-align: center;
-    background-color: {gn_bg};
-}}
-</style>
-<script>
-  setTimeout(() => {{
-    location.href = location.href.split('?')[0] + '?t=' + Date.now();
-  }}, 5000);
-</script>
-</head>
-<body>
-    <div id="gonogo">
-    <div class="status-box" style="color: {c0};">Range: {disp[0]}</div>
-    <div class="status-box" style="color: {c2};">Vehicle: {disp[2]}</div>
-    <div class="status-box" style="color: {c1};">Weather: {disp[1]}</div>
-</div>
-</body>
-</html>"""
-    with open(GONOGO_HTML, "w", encoding="utf-8") as f:
-        f.write(html)
-
-
-
-# -------------------------
-# Countdown App
-# -------------------------
-class CountdownApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title(f"RocketLaunchCountdown {appVersion}")
-        self.root.config(bg="black")
-        self.root.attributes("-topmost", True)
-        self.root.geometry("800x615")
-
-        # State
+# Countdown class
+class CountdownMain:
+    def __init__(self):
         self.running = False
-        self.on_hold = False
-        self.scrubbed = False
-        self.counting_up = False
         self.target_time = None
-        self.hold_start_time = None
-        self.remaining_time = 0
-        self.mission_name = "Placeholder Mission"
-        # fetch_gonogo() returns [Range, Weather, Vehicle] to match gonogo.html writer
-        self.gonogo_values = fetch_gonogo()
-        self.major_concerns = fetch_major_concerns()
-        write_major_concerns_html(self.major_concerns)
-        self.last_gonogo_update = time.time()
-        # track last time we refreshed major concerns
-        self.last_concerns_update = time.time()
-        # track which auto-holds we've already triggered for the current run
-        self._auto_hold_triggered = set()
-        # count mode
-        self.count_mode = tk.StringVar(value="T-")
-
-        # Title
-        self.titletext = tk.Label(
-            root,
-            text=f"RocketLaunchCountdown {appVersion}",
-            font=("Consolas", 24),
-            fg="white",
-            bg="black",
-        )
-        self.titletext.pack(pady=(10, 0))
-
-        # Display
-        frame_count = tk.Frame(root, bg="black")
-        frame_count.pack(pady=(0, 5))
-
-        self.text = tk.Label(frame_count, text="T-00:00:00", font=("Consolas", 80, "bold"), fg="white", bg="black")
-        self.text.pack(side="left", padx=(0, 10))
-
-        # Static label above the button
-        self.mode_label = tk.Label(frame_count, text="T-/L- Toggle", font=("Consolas", 14), fg="white", bg="black")
-        self.mode_label.pack(side="top", pady=(0, 5))
-
-        # Toggle button below the label
-        self.toggle_mode_btn = tk.Button(frame_count, text="↺", command=self.toggle_count_mode, font=("Arial", 14), width=3)
-        self.toggle_mode_btn.pack(side="top")
-        
-        self.text.pack(pady=(0, 5))
-
-        # Mission name input
-        frame_top = tk.Frame(root, bg="black")
-        frame_top.pack(pady=5)
-        tk.Label(frame_top, text="Mission Name:", fg="white", bg="black").pack(
-            side="left"
-        )
-        self.mission_entry = tk.Entry(frame_top, width=20, font=("Arial", 18))
-        self.mission_entry.insert(0, self.mission_name)
-        self.mission_entry.pack(side="left")
-
-        # Mode toggle
-        frame_mode = tk.Frame(root, bg="black")
-        frame_mode.pack(pady=5)
-
-        self.mode_var = tk.StringVar(value="duration")
-
-        self.radio_duration = tk.Radiobutton(
-            frame_mode,
-            text="Duration",
-            variable=self.mode_var,
-            value="duration",
-            fg="white",
-            bg="black",
-            selectcolor="black",  # makes the dot visible
-            command=self.update_inputs,
-        )
-        self.radio_duration.pack(side="left", padx=5)
-
-        self.radio_clock = tk.Radiobutton(
-            frame_mode,
-            text="Clock Time",
-            variable=self.mode_var,
-            value="clock",
-            fg="white",
-            bg="black",
-            selectcolor="black",  # makes the dot visible
-            command=self.update_inputs,
-        )
-        self.radio_clock.pack(side="left", padx=5)
-
-        # Duration inputs
-        frame_duration = tk.Frame(root, bg="black")
-        frame_duration.pack(pady=5)
-        tk.Label(frame_duration, text="H", fg="white", bg="black").pack(side="left")
-        self.hours_entry = tk.Entry(frame_duration, width=3, font=("Arial", 18))
-        self.hours_entry.insert(0, "0")
-        self.hours_entry.pack(side="left", padx=2)
-        tk.Label(frame_duration, text="M", fg="white", bg="black").pack(side="left")
-        self.minutes_entry = tk.Entry(frame_duration, width=3, font=("Arial", 18))
-        self.minutes_entry.insert(0, "5")
-        self.minutes_entry.pack(side="left", padx=2)
-        tk.Label(frame_duration, text="S", fg="white", bg="black").pack(side="left")
-        self.seconds_entry = tk.Entry(frame_duration, width=3, font=("Arial", 18))
-        self.seconds_entry.insert(0, "0")
-        self.seconds_entry.pack(side="left", padx=2)
-
-        # Auto-hold quick button (opens H/M/S dialog)
-        def open_autohold_dialog():
-            dlg = tk.Toplevel(self.root)
-            dlg.transient(self.root)
-            dlg.title("Set Auto-hold")
-            dlg.geometry("320x110")
-            # theme according to appearance mode
-            ssettings = load_settings()
-            mode_local = ssettings.get(
-                "appearance_mode", DEFAULT_SETTINGS.get("appearance_mode", "dark")
-            )
-            if mode_local == "dark":
-                dlg_bg = "#000000"
-                dlg_fg = "#FFFFFF"
-                entry_bg = "#222222"
-                btn_bg = "#FFFFFF"
-                btn_fg = "#000000"
-            else:
-                dlg_bg = "#FFFFFF"
-                dlg_fg = "#000000"
-                entry_bg = "#b4b4b4"
-                btn_bg = "#000000"
-                btn_fg = "#FFFFFF"
-            dlg.config(bg=dlg_bg)
-            tk.Label(dlg, text="Auto-hold time (H M S):", fg=dlg_fg, bg=dlg_bg).pack(
-                pady=(6, 0)
-            )
-            box = tk.Frame(dlg, bg=dlg_bg)
-            box.pack(pady=6)
-            h_entry = tk.Entry(
-                box,
-                width=3,
-                font=("Arial", 12),
-                bg=entry_bg,
-                fg=dlg_fg,
-                insertbackground=dlg_fg,
-            )
-            m_entry = tk.Entry(
-                box,
-                width=3,
-                font=("Arial", 12),
-                bg=entry_bg,
-                fg=dlg_fg,
-                insertbackground=dlg_fg,
-            )
-            s_entry = tk.Entry(
-                box,
-                width=3,
-                font=("Arial", 12),
-                bg=entry_bg,
-                fg=dlg_fg,
-                insertbackground=dlg_fg,
-            )
-            h_entry.pack(side="left", padx=4)
-            tk.Label(box, text="H", fg=dlg_fg, bg=dlg_bg).pack(side="left")
-            m_entry.pack(side="left", padx=4)
-            tk.Label(box, text="M", fg=dlg_fg, bg=dlg_bg).pack(side="left")
-            s_entry.pack(side="left", padx=4)
-            tk.Label(box, text="S", fg=dlg_fg, bg=dlg_bg).pack(side="left")
-
-            # populate with first configured value if present
-            try:
-                ssettings = load_settings()
-                a = ssettings.get("auto_hold_times") or []
-                if a:
-                    secs = int(a[0])
-                    hh = secs // 3600
-                    mm = (secs % 3600) // 60
-                    ss = secs % 60
-                    h_entry.insert(0, str(hh))
-                    m_entry.insert(0, str(mm))
-                    s_entry.insert(0, str(ss))
-            except Exception:
-                pass
-
-            def do_save():
-                try:
-                    hh = int(h_entry.get() or 0)
-                    mm = int(m_entry.get() or 0)
-                    ss = int(s_entry.get() or 0)
-                    total = max(0, hh * 3600 + mm * 60 + ss)
-                except Exception:
-                    total = 0
-                try:
-                    ssettings = load_settings()
-                    # replace with single auto-hold time (list with one element)
-                    ssettings["auto_hold_times"] = [int(total)] if total > 0 else []
-                    save_settings(ssettings)
-                    # update runtime set so this run will consider the new value
-                    self._auto_hold_triggered = set()
-                except Exception:
-                    pass
-                dlg.destroy()
-
-            btnf = tk.Frame(dlg, bg=dlg_bg)
-            btnf.pack(fill="x", pady=6)
-            tk.Button(
-                btnf,
-                text="Save",
-                command=do_save,
-                width=10,
-                bg=btn_bg,
-                fg=btn_fg,
-                activebackground="#444",
-            ).pack(side="right", padx=6)
-            tk.Button(
-                btnf,
-                text="Cancel",
-                command=dlg.destroy,
-                width=10,
-                bg=btn_bg,
-                fg=btn_fg,
-                activebackground="#444",
-            ).pack(side="right")
-
-            # recursively theme dialog to ensure consistency
-            try:
-                self._theme_recursive(dlg, dlg_bg, dlg_fg, btn_bg, btn_fg)
-            except Exception:
-                pass
-
-        tk.Button(
-            frame_duration,
-            text="Auto-hold...",
-            command=open_autohold_dialog,
-            fg="white",
-            bg="#333",
-            width=12,
-        ).pack(side="left", padx=8)
-
-        # Clock time input (separate HH, MM, SS boxes)
-        frame_clock = tk.Frame(root, bg="black")
-        frame_clock.pack(pady=5)
-        tk.Label(frame_clock, text="Clock (HH:MM:SS)", fg="white", bg="black").pack(
-            side="left"
-        )
-        self.clock_hours_entry = tk.Entry(
-            frame_clock,
-            width=3,
-            font=("Arial", 18),
-            fg="white",
-            bg="#111",
-            insertbackground="white",
-        )
-        self.clock_hours_entry.insert(0, "14")
-        self.clock_hours_entry.pack(side="left", padx=2)
-        tk.Label(frame_clock, text=":", fg="white", bg="black").pack(side="left")
-        self.clock_minutes_entry = tk.Entry(
-            frame_clock,
-            width=3,
-            font=("Arial", 18),
-            fg="white",
-            bg="#111",
-            insertbackground="white",
-        )
-        self.clock_minutes_entry.insert(0, "00")
-        self.clock_minutes_entry.pack(side="left", padx=2)
-        tk.Label(frame_clock, text=":", fg="white", bg="black").pack(side="left")
-        self.clock_seconds_entry = tk.Entry(
-            frame_clock,
-            width=3,
-            font=("Arial", 18),
-            fg="white",
-            bg="#111",
-            insertbackground="white",
-        )
-        self.clock_seconds_entry.insert(0, "00")
-        self.clock_seconds_entry.pack(side="left", padx=2)
-
-        # Control buttons
-        frame_buttons = tk.Frame(root, bg="black")
-        frame_buttons.pack(pady=10)
-
-        self.start_btn = tk.Button(
-            frame_buttons, text="▶ Start", command=self.start, font=("Arial", 14)
-        )
-        self.start_btn.grid(row=0, column=0, padx=5)
-
-        # Hold and resume share the same position
-        self.hold_btn = tk.Button(
-            frame_buttons, text="⏸ Hold", command=self.hold, font=("Arial", 14)
-        )
-        self.hold_btn.grid(row=0, column=1, padx=5)
-
-        self.resume_btn = tk.Button(
-            frame_buttons, text="⏵ Resume", command=self.resume, font=("Arial", 14)
-        )
-        self.resume_btn.grid(row=0, column=1, padx=5)
-        self.resume_btn.grid_remove()  # hidden at start
-
-        self.scrub_btn = tk.Button(
-            frame_buttons,
-            text="🚫 Scrub",
-            command=self.scrub,
-            font=("Arial", 14),
-            fg="red",
-        )
-        self.scrub_btn.grid(row=0, column=2, padx=5)
-
-        self.reset_btn = tk.Button(
-            frame_buttons, text="⟳ Reset", command=self.reset, font=("Arial", 14)
-        )
-        self.reset_btn.grid(row=0, column=3, padx=5)
-        # Settings button moved next to control buttons (match size/style)
-        self.settings_btn = tk.Button(
-            frame_buttons,
-            text="Settings",
-            command=self.show_settings_window,
-            font=("Arial", 14),
-            width=10,
-        )
-        self.settings_btn.grid(row=0, column=4, padx=6)
-
-        # Manual Go/No-Go buttons will go next to control buttons
-        self.manual_frame = tk.Frame(root, bg="black")
-        self.manual_frame.pack(pady=6)
-
-        # Buttons now toggle current state between GO and NOGO
-        self.range_toggle_btn = tk.Button(
-            self.manual_frame,
-            text="Range: Toggle",
-            width=12,
-            command=lambda: self._toggle_manual("range"),
-        )
-        self.weather_toggle_btn = tk.Button(
-            self.manual_frame,
-            text="Weather: Toggle",
-            width=12,
-            command=lambda: self._toggle_manual("weather"),
-        )
-        self.vehicle_toggle_btn = tk.Button(
-            self.manual_frame,
-            text="Vehicle: Toggle",
-            width=12,
-            command=lambda: self._toggle_manual("vehicle"),
-        )
-
-        # new button to open manual percentage dialog
-        self.manual_percent_btn = tk.Button(
-            self.manual_frame,
-            text="Manual Percentages...",
-            width=18,
-            command=self.open_manual_percent_dialog,
-        )
-        self.manual_percent_btn.grid(row=1, column=0, columnspan=3, pady=(6,0))
-
-
-        # Placeholders; visibility will be controlled by settings
-        self.range_toggle_btn.grid(row=0, column=0, padx=4, pady=2)
-        self.weather_toggle_btn.grid(row=0, column=1, padx=4, pady=2)
-        self.vehicle_toggle_btn.grid(row=0, column=2, padx=4, pady=2)
-
-        frame_gn = tk.Frame(root, bg="black")
-        frame_gn.pack(pady=10)
-        # Labels displayed: Range, Weather, Vehicle — match write_gonogo_html ordering
-        self.range_label = tk.Label(
-            frame_gn, text="RANGE: N/A", font=("Consolas", 20), fg="white", bg="black"
-        )
-        self.range_label.pack()
-        self.weather_label = tk.Label(
-            frame_gn, text="WEATHER: N/A", font=("Consolas", 20), fg="white", bg="black"
-        )
-        self.weather_label.pack()
-        self.vehicle_label = tk.Label(
-            frame_gn, text="VEHICLE: N/A", font=("Consolas", 20), fg="white", bg="black"
-        )
-        self.vehicle_label.pack()
-
-        self.concerns_label = tk.Label(
-            frame_gn, text=F"Major Concerns: {self.major_concerns}" , font=("Consolas", 14), fg="white", bg="black"
-        )
-        self.concerns_label.pack()
-
-        # Footer
-        footer_frame = tk.Frame(root, bg="black")
-        footer_frame.pack(side="bottom", pady=0, fill="x")
-
-        self.footer_label = tk.Label(
-            footer_frame,
-            text="Made by HamsterSpaceNerd3000",  # or whatever you want
-            font=("Consolas", 12),
-            fg="black",
-            bg="white",
-        )
-        self.footer_label.pack(fill="x")
-        self.update_inputs()
-        # set initial manual button visibility from settings
-        self.update_manual_visibility()
-        # Apply appearance settings at startup so the mission entry and other widgets reflect the saved mode
-        try:
-            self.apply_appearance_settings()
-        except Exception:
-            pass
-        self.update_clock()
-    
-    def open_manual_percent_dialog(self):
-        """Open dialog to set manual percentages for Range, Weather, Vehicle.
-           Stores values on fetch_gonogo function so fetch_gonogo() reads them."""
-        dlg = tk.Toplevel(self.root)
-        dlg.transient(self.root)
-        dlg.title("Manual Percentages (0-100)")
-        dlg.geometry("360x180")
-        ssettings = load_settings()
-        mode_local = ssettings.get("appearance_mode", "dark")
-        if mode_local == "dark":
-            dlg_bg = "#000000"
-            dlg_fg = "#FFFFFF"
-            entry_bg = "#222222"
-            btn_bg = "#FFFFFF"
-            btn_fg = "#000000"
-        else:
-            dlg_bg = "#FFFFFF"
-            dlg_fg = "#000000"
-            entry_bg = "#b4b4b4"
-            btn_bg = "#000000"
-            btn_fg = "#FFFFFF"
-        dlg.config(bg=dlg_bg)
-
-        tk.Label(dlg, text="Weather (%)", fg=dlg_fg, bg=dlg_bg).pack(pady=(8, 0))
-        w_entry = tk.Entry(dlg, bg=entry_bg, fg=dlg_fg, insertbackground=dlg_fg)
-        w_entry.pack()
-
-        # populate with existing manual values (if any)
-        try:
-            w = getattr(fetch_gonogo, "manual_weather", "")
-            w_entry.insert(0, str(w))
-        except Exception:
-            pass
-
-        def do_save():
-            def clean_val(x):
-                try:
-                    if x is None:
-                        return ""
-                    s = str(x).strip()
-                    if s == "":
-                        return ""
-                    # try to parse numeric; if numeric, store as number-ish string
-                    f = float(s)
-                    # clamp 0..100
-                    f = max(0.0, min(100.0, f))
-                    # store as int if whole
-                    if abs(f - round(f)) < 0.001:
-                        return str(int(round(f)))
-                    return f"{f:.1f}"
-                except Exception:
-                    # store raw (allow GO/NOGO legacy)
-                    return s
-
-            try:
-                fetch_gonogo.manual_weather = clean_val(w_entry.get())
-            except Exception:
-                pass
-            # update local labels immediately
-            self.gonogo_values = fetch_gonogo()
-            self._refresh_gonogo_labels()
-            dlg.destroy()
-
-        btnf = tk.Frame(dlg, bg=dlg_bg)
-        btnf.pack(fill="x", pady=8)
-        tk.Button(btnf, text="Save", command=do_save, width=10, bg=btn_bg, fg=btn_fg).pack(
-            side="right", padx=8
-        )
-        tk.Button(btnf, text="Cancel", command=dlg.destroy, width=10, bg=btn_bg, fg=btn_fg).pack(
-            side="right"
-        )
-
-
-    def _refresh_gonogo_labels(self):
-        # reads current gonogo_values and updates the three label widgets with color
-        try:
-            vals = self.gonogo_values
-            # in case gonogo_values is stale, fetch again
-            if not vals or len(vals) < 3:
-                vals = fetch_gonogo()
-                self.gonogo_values = vals
-            # format and apply colors
-            r_disp = format_status_display(vals[0])
-            w_disp = format_status_display(vals[1])
-            v_disp = format_status_display(vals[2])
-            self.range_label.config(text=f"RANGE: {r_disp}", fg=get_status_color(vals[0]))
-            self.weather_label.config(text=f"WEATHER: {w_disp}", fg=get_status_color(vals[1]))
-            self.vehicle_label.config(text=f"VEHICLE: {v_disp}", fg=get_status_color(vals[2]))
-            # also write out the html so external display updates
-            write_gonogo_html(vals)
-            self.last_gonogo_update = time.time()
-        except Exception:
-            pass
-
-
-    # ----------------------------
-    # Settings window
-    # ----------------------------
-    def show_settings_window(self):
-        settings = load_settings()
-        win = tk.Toplevel(self.root)
-        win.transient(self.root)
-        win.title("Settings")
-        win.geometry("560x275")
-        # apply current appearance mode so the settings window matches the main UI
-        s_local = load_settings()
-        mode_local = s_local.get("appearance_mode", "dark")
-        if mode_local == "dark":
-            win_bg = "#000000"
-            win_text = "#FFFFFF"
-            btn_bg = "#FFFFFF"
-            btn_fg = "#000000"
-        else:
-            win_bg = "#FFFFFF"
-            win_text = "#000000"
-            btn_bg = "#000000"
-            btn_fg = "#FFFFFF"
-        win.config(bg=win_bg)
-        # set per-window widget defaults so nested widgets inherit the chosen theme
-        try:
-            win.option_add("*Foreground", win_text)
-            win.option_add("*Background", win_bg)
-            # entry specific defaults
-            win.option_add(
-                "*Entry.Background", "#222" if mode_local == "dark" else "#b4b4b4"
-            )
-            win.option_add(
-                "*Entry.Foreground", win_text if mode_local == "dark" else "#000000"
-            )
-        except Exception:
-            pass
-        # keep track of this Toplevel so other dialogs can close it if needed
-        try:
-            self.settings_win = win
-
-            def _clear_settings_ref(evt=None):
-                try:
-                    self.settings_win = None
-                except Exception:
-                    pass
-
-            win.bind("<Destroy>", _clear_settings_ref)
-        except Exception:
-            pass
-
-        # Mode selection
-        frame_mode = tk.Frame(win)
-        frame_mode.config(bg=win_bg)
-        frame_mode.pack(fill="x", pady=8, padx=8)
-        tk.Label(frame_mode, text="Mode:", fg=win_text, bg=win_bg).pack(side="left")
-        mode_var = tk.StringVar(value=settings.get("mode", "spreadsheet"))
-        tk.Radiobutton(
-            frame_mode,
-            text="Spreadsheet",
-            variable=mode_var,
-            value="spreadsheet",
-            fg=win_text,
-            bg=win_bg,
-            selectcolor=win_bg,
-        ).pack(side="left", padx=8)
-        tk.Radiobutton(
-            frame_mode,
-            text="Buttons (manual)",
-            variable=mode_var,
-            value="buttons",
-            fg=win_text,
-            bg=win_bg,
-            selectcolor=win_bg,
-        ).pack(side="left", padx=8)
-
-        # Spreadsheet config
-        frame_sheet = tk.LabelFrame(
-            win, text="Spreadsheet configuration", fg=win_text, bg=win_bg
-        )
-        frame_sheet.config(bg=win_bg)
-        frame_sheet.pack(fill="x", padx=8, pady=6)
-        tk.Label(
-            frame_sheet, text="Sheet link (CSV export):", fg=win_text, bg=win_bg
-        ).pack(anchor="w")
-        # entry background chosen to contrast with window background
-        sheet_entry_bg = "#222" if mode_local == "dark" else "#b4b4b4"
-        sheet_entry_fg = win_text if mode_local == "dark" else "#000000"
-        sheet_entry = tk.Entry(
-            frame_sheet,
-            width=80,
-            fg=sheet_entry_fg,
-            bg=sheet_entry_bg,
-            insertbackground=sheet_entry_fg,
-        )
-        sheet_entry.pack(fill="x", padx=6, pady=4)
-        sheet_entry.insert(0, settings.get("sheet_link", SHEET_LINK))
-
-        # Accept cells in 'L3' format for each parameter
-        cell_frame = tk.Frame(frame_sheet)
-        cell_frame.config(bg=win_bg)
-        cell_frame.pack(fill="x", padx=6, pady=2)
-        tk.Label(cell_frame, text="Range cell (e.g. L3):", fg=win_text, bg=win_bg).grid(
-            row=0, column=0
-        )
-        range_cell_bg = "#222" if mode_local == "dark" else "#b4b4b4"
-        range_cell_fg = win_text if mode_local == "dark" else "#000000"
-        range_cell = tk.Entry(
-            cell_frame,
-            width=8,
-            fg=range_cell_fg,
-            bg=range_cell_bg,
-            insertbackground=range_cell_fg,
-        )
-        range_cell.grid(row=0, column=1, padx=4)
-        # show as L3 if present, otherwise build from numeric settings
-        try:
-            if "range_cell" in settings:
-                range_cell.insert(0, settings.get("range_cell"))
-            else:
-                # convert numeric row/column to cell like L3
-                col = settings.get("column", DEFAULT_SETTINGS["column"])
-                row = settings.get("range_row", DEFAULT_SETTINGS["range_row"])
-
-                # column number to letters
-                def col_to_letters(n):
-                    s = ""
-                    while n > 0:
-                        n, r = divmod(n - 1, 26)
-                        s = chr(ord("A") + r) + s
-                    return s
-
-                range_cell.insert(0, f"{col_to_letters(col)}{row}")
-        except Exception:
-            range_cell.insert(0, f"L3")
-
-        tk.Label(
-            cell_frame, text="Weather cell (e.g. L4):", fg=win_text, bg=win_bg
-        ).grid(row=0, column=2)
-        weather_cell = tk.Entry(
-            cell_frame,
-            width=8,
-            fg=range_cell_fg,
-            bg=range_cell_bg,
-            insertbackground=range_cell_fg,
-        )
-        weather_cell.grid(row=0, column=3, padx=4)
-        try:
-            if "weather_cell" in settings:
-                weather_cell.insert(0, settings.get("weather_cell"))
-            else:
-                col = settings.get("column", DEFAULT_SETTINGS["column"])
-                row = settings.get("weather_row", DEFAULT_SETTINGS["weather_row"])
-
-                def col_to_letters(n):
-                    s = ""
-                    while n > 0:
-                        n, r = divmod(n - 1, 26)
-                        s = chr(ord("A") + r) + s
-                    return s
-
-                weather_cell.insert(0, f"{col_to_letters(col)}{row}")
-        except Exception:
-            weather_cell.insert(0, f"L4")
-
-        tk.Label(
-            cell_frame, text="Vehicle cell (e.g. L5):", fg=win_text, bg=win_bg
-        ).grid(row=0, column=4)
-        vehicle_cell = tk.Entry(
-            cell_frame,
-            width=8,
-            fg=range_cell_fg,
-            bg=range_cell_bg,
-            insertbackground=range_cell_fg,
-        )
-        vehicle_cell.grid(row=0, column=5, padx=4)
-        try:
-            if "vehicle_cell" in settings:
-                vehicle_cell.insert(0, settings.get("vehicle_cell"))
-            else:
-                col = settings.get("column", DEFAULT_SETTINGS["column"])
-                row = settings.get("vehicle_row", DEFAULT_SETTINGS["vehicle_row"])
-
-                def col_to_letters(n):
-                    s = ""
-                    while n > 0:
-                        n, r = divmod(n - 1, 26)
-                        s = chr(ord("A") + r) + s
-                    return s
-
-                vehicle_cell.insert(0, f"{col_to_letters(col)}{row}")
-        except Exception:
-            vehicle_cell.insert(0, f"L5")
-
-        tk.Label(
-        cell_frame, text="Major concerns cell (e.g. L6):", fg=win_text, bg=win_bg
-        ).grid(row=1, column=0, sticky="w")
-        major_concerns_cell = tk.Entry(
-            cell_frame,
-            width=8,
-            fg=range_cell_fg,
-            bg=range_cell_bg,
-            insertbackground=range_cell_fg,
-        )
-        major_concerns_cell.grid(row=1, column=1, padx=4)
-        try:
-            if "major_concerns_cell" in settings:
-                major_concerns_cell.insert(0, settings.get("major_concerns_cell"))
-            else:
-                col = settings.get("column", DEFAULT_SETTINGS["column"])
-                row = settings.get("major_concerns_row", DEFAULT_SETTINGS["major_concerns_row"])
-
-                def col_to_letters(n):
-                    s = ""
-                    while n > 0:
-                        n, r = divmod(n - 1, 26)
-                        s = chr(ord("A") + r) + s
-                    return s
-
-                major_concerns_cell.insert(0, f"{col_to_letters(col)}{row}")
-        except Exception:
-            # fall back to the canonical default setting (keeps UI/defaults consistent)
-            major_concerns_cell.insert(0, settings.get("major_concerns_cell", DEFAULT_SETTINGS.get("major_concerns_cell", "L9")))
-
-
-        # Manual buttons config
-        frame_buttons_cfg = tk.LabelFrame(
-            win, text="Manual Go/No-Go (Buttons mode)", fg=win_text, bg=win_bg
-        )
-        frame_buttons_cfg.config(bg=win_bg)
-        frame_buttons_cfg.pack(fill="x", padx=8, pady=6)
-
-        # (Auto-hold configuration removed from Settings — managed from main UI)
-
-        # Appearance settings are in a separate window
-        frame_appearance_btn = tk.Frame(win, bg=win_bg)
-        frame_appearance_btn.pack(fill="x", padx=8, pady=6)
-        tk.Button(
-            frame_appearance_btn,
-            text="Appearance...",
-            command=lambda: self.show_appearance_window(),
-            fg=btn_fg,
-            bg=btn_bg,
-            activebackground="#444",
-        ).pack(side="left")
-
-        # Timezone selector
-        tz_frame = tk.Frame(frame_sheet, bg=win_bg)
-        tz_frame.pack(fill="x", padx=6, pady=4)
-        tk.Label(tz_frame, text="Timezone:", fg=win_text, bg=win_bg).pack(side="left")
-        tz_var = tk.StringVar(
-            value=settings.get("timezone", DEFAULT_SETTINGS.get("timezone", "local"))
-        )
-        # OptionMenu with a few choices, but user may edit the text to any IANA name
-        tz_menu = tk.OptionMenu(tz_frame, tz_var, *TIMEZONE_CHOICES)
-        tz_menu.config(fg=win_text, bg=range_cell_bg, activebackground="#333")
-        tz_menu.pack(side="left", padx=6)
-
-        def set_manual(val_type, val):
-            # store on fetch_gonogo func for now
-            if val_type == "range":
-                fetch_gonogo.manual_range = val
-            elif val_type == "weather":
-                fetch_gonogo.manual_weather = val
-            elif val_type == "vehicle":
-                fetch_gonogo.manual_vehicle = val
-
-        # helper to set manual and update UI from main app
-        def set_manual_and_update(val_type, val):
-            set_manual(val_type, val)
-            # update labels and write html
-            self.gonogo_values = fetch_gonogo()
-            # update GUI labels immediately
-            self.range_label.config(
-                text=f"RANGE: {self.gonogo_values[0]}",
-                fg=get_status_color(self.gonogo_values[0]),
-            )
-            self.weather_label.config(
-                text=f"WEATHER: {self.gonogo_values[1]}",
-                fg=get_status_color(self.gonogo_values[1]),
-            )
-            self.vehicle_label.config(
-                text=f"VEHICLE: {self.gonogo_values[2]}",
-                fg=get_status_color(self.gonogo_values[2]),
-            )
-            write_gonogo_html(self.gonogo_values)
-
-        # Save/Cancel
-        def cell_to_rc(cell_str):
-            s = (cell_str or "").strip().upper()
-            if not s:
-                return None, None
-            # split letters and digits
-            letters = ""
-            digits = ""
-            for ch in s:
-                if ch.isalpha():
-                    letters += ch
-                elif ch.isdigit():
-                    digits += ch
-            if not digits:
-                return None, None
-            # convert letters to number
-            col = 0
-            for ch in letters:
-                col = col * 26 + (ord(ch) - ord("A") + 1)
-            row = int(digits)
-            return row, col
-
-        def on_save():
-            # parse cells
-            r_row, r_col = cell_to_rc(range_cell.get())
-            w_row, w_col = cell_to_rc(weather_cell.get())
-            v_row, v_col = cell_to_rc(vehicle_cell.get())
-            # fallbacks
-            if r_row is None:
-                r_row = DEFAULT_SETTINGS["range_row"]
-            if w_row is None:
-                w_row = DEFAULT_SETTINGS["weather_row"]
-            if v_row is None:
-                v_row = DEFAULT_SETTINGS["vehicle_row"]
-            # determine column to use (prefer range column, else weather, else vehicle, else default)
-            col_val = r_col or w_col or v_col or DEFAULT_SETTINGS["column"]
-            new_settings = {
-                "mode": mode_var.get(),
-                "sheet_link": sheet_entry.get().strip() or SHEET_LINK,
-                "range_row": int(r_row),
-                "weather_row": int(w_row),
-                "vehicle_row": int(v_row),
-                "column": int(col_val),
-                # persist the textual cells for convenience
-                "range_cell": range_cell.get().strip().upper(),
-                "weather_cell": weather_cell.get().strip().upper(),
-                "vehicle_cell": vehicle_cell.get().strip().upper(),
-                # persist major concerns cell if provided
-                "major_concerns_cell": major_concerns_cell.get().strip().upper(),
-                # persist manual values if present
-                "manual_range": getattr(fetch_gonogo, "manual_range", None),
-                "manual_weather": getattr(fetch_gonogo, "manual_weather", None),
-                "manual_vehicle": getattr(fetch_gonogo, "manual_vehicle", None),
-                "timezone": tz_var.get(),
-                # preserve appearance settings (edited in Appearance window)
-                "bg_color": settings.get("bg_color", "#000000"),
-                "text_color": settings.get("text_color", "#FFFFFF"),
-                "gn_bg_color": settings.get("gn_bg_color", "#111111"),
-                "gn_border_color": settings.get("gn_border_color", "#FFFFFF"),
-                "gn_go_color": settings.get("gn_go_color", "#00FF00"),
-                "gn_nogo_color": settings.get("gn_nogo_color", "#FF0000"),
-                "font_family": settings.get("font_family", "Consolas"),
-                "mission_font_px": int(settings.get("mission_font_px", 48)),
-                "timer_font_px": int(settings.get("timer_font_px", 120)),
-                "gn_font_px": int(settings.get("gn_font_px", 28)),
-            }
-            # Auto-hold editing removed from Settings window; keep existing settings value
-            new_settings["auto_hold_times"] = settings.get("auto_hold_times", [])
-            # preserve the appearance_mode so saving Settings doesn't accidentally remove it
-            try:
-                new_settings["appearance_mode"] = settings.get(
-                    "appearance_mode", DEFAULT_SETTINGS.get("appearance_mode", "dark")
-                )
-            except Exception:
-                new_settings["appearance_mode"] = DEFAULT_SETTINGS.get(
-                    "appearance_mode", "dark"
-                )
-            save_settings(new_settings)
-            # update immediately
-            self.gonogo_values = fetch_gonogo()
-            write_gonogo_html(self.gonogo_values)
-            # update manual visibility in main UI
-            self.update_manual_visibility()
-            # appearance changes are applied only from the Appearance window
-            win.destroy()
-
-        def on_cancel():
-            win.destroy()
-
-        btn_frame = tk.Frame(win, bg=win_bg)
-        btn_frame.pack(fill="x", pady=8)
-        tk.Button(
-            btn_frame,
-            text="Save",
-            command=on_save,
-            fg=btn_fg,
-            bg=btn_bg,
-            activebackground="#444",
-        ).pack(side="right", padx=8)
-        tk.Button(
-            btn_frame,
-            text="Cancel",
-            command=on_cancel,
-            fg=btn_fg,
-            bg=btn_bg,
-            activebackground="#444",
-        ).pack(side="right")
-        # ensure the new toplevel gets recursively themed like the main window
-        try:
-            self._theme_recursive(win, win_bg, win_text, btn_bg, btn_fg)
-        except Exception:
-            pass
-
-    # ----------------------------
-    # Update input visibility based on mode
-    # ----------------------------
-    def update_inputs(self):
-        if self.mode_var.get() == "duration":
-            self.hours_entry.config(state="normal")
-            self.minutes_entry.config(state="normal")
-            self.seconds_entry.config(state="normal")
-            self.clock_hours_entry.config(state="disabled")
-            self.clock_minutes_entry.config(state="disabled")
-            self.clock_seconds_entry.config(state="disabled")
-        else:
-            self.hours_entry.config(state="disabled")
-            self.minutes_entry.config(state="disabled")
-            self.seconds_entry.config(state="disabled")
-            self.clock_hours_entry.config(state="normal")
-            self.clock_minutes_entry.config(state="normal")
-            self.clock_seconds_entry.config(state="normal")
-
-    # ----------------------------
-    # Manual controls & helpers
-    # ----------------------------
-    def set_manual(self, which, val):
-        # normalize
-        v = (val or "").strip().upper()
-        if which == "range":
-            fetch_gonogo.manual_range = v
-        elif which == "weather":
-            fetch_gonogo.manual_weather = v
-        elif which == "vehicle":
-            fetch_gonogo.manual_vehicle = v
-        # update GUI and HTML
-        self.gonogo_values = fetch_gonogo()
-        try:
-            self.range_label.config(
-                text=f"RANGE: {self.gonogo_values[0]}",
-                fg=get_status_color(self.gonogo_values[0]),
-            )
-            self.weather_label.config(
-                text=f"WEATHER: {self.gonogo_values[1]}",
-                fg=get_status_color(self.gonogo_values[1]),
-            )
-            self.vehicle_label.config(
-                text=f"VEHICLE: {self.gonogo_values[2]}",
-                fg=get_status_color(self.gonogo_values[2]),
-            )
-        except Exception:
-            pass
-        write_gonogo_html(self.gonogo_values)
-        # persist manual values immediately so they survive restarts
-        try:
-            s = load_settings()
-            s["manual_range"] = getattr(
-                fetch_gonogo, "manual_range", s.get("manual_range")
-            )
-            s["manual_weather"] = getattr(
-                fetch_gonogo, "manual_weather", s.get("manual_weather")
-            )
-            s["manual_vehicle"] = getattr(
-                fetch_gonogo, "manual_vehicle", s.get("manual_vehicle")
-            )
-            save_settings(s)
-        except Exception:
-            pass
-
-    def update_manual_visibility(self):
-        s = load_settings()
-        mode = s.get("mode", "spreadsheet")
-        visible = mode == "buttons"
-        # show or hide manual frame
-        if visible:
-            self.manual_frame.pack(pady=6)
-        else:
-            self.manual_frame.pack_forget()
-
-    def apply_appearance_settings(self):
-        """Apply appearance-related settings to the running Tk UI."""
-        s = load_settings()
-        # If an appearance_mode preset is selected, override specific settings with the preset
-        mode = s.get("appearance_mode", None)
-        if mode == "dark":
-            s.update(
-                {
-                    "bg_color": "#000000",
-                    "text_color": "#FFFFFF",
-                    "countdown_text_color": "#FFFFFF",
-                    "font_family": "Consolas",
-                    "mission_font_px": 44,
-                    "timer_font_px": 80,
-                    "gn_font_px": 24,
-                }
-            )
-        elif mode == "light":
-            s.update(
-                {
-                    "bg_color": "#FFFFFF",
-                    "text_color": "#000000",
-                    "countdown_text_color": "#FFFFFF",
-                    "font_family": "Consolas",
-                    "mission_font_px": 44,
-                    "timer_font_px": 80,
-                    "gn_font_px": 24,
-                }
-            )
-        bg = s.get("bg_color", "#000000")
-        text = s.get("text_color", "#FFFFFF")
-        font_family = s.get("font_family", "Consolas")
-        timer_px = int(s.get("timer_font_px", 100))
-        mission_px = int(s.get("mission_font_px", 48))
-        gn_px = int(s.get("gn_font_px", 24))
-        gn_bg = s.get("gn_bg_color", "#111111")
-        gn_border = s.get("gn_border_color", "#FFFFFF")
-        gn_go = s.get("gn_go_color", "#00FF00")
-        gn_nogo = s.get("gn_nogo_color", "#FF0000")
-        # apply to main window elements
-        try:
-            self.root.config(bg=bg)
-            self.titletext.config(fg=text, bg=bg, font=(font_family, 20))
-            # timer label
-            self.text.config(fg=text, bg=bg, font=(font_family, timer_px, "bold"))
-
-            # GN labels: set bg and font, and color depending on GO/NOGO
-            def style_gn_label(lbl, value):
-                try:
-                    lbl.config(bg=bg, font=(font_family, gn_px))
-                    v = (value or "").strip().upper()
-                    if v == "GO":
-                        lbl.config(fg=gn_go)
-                    elif v in ("NOGO", "NO-GO"):
-                        lbl.config(fg=gn_nogo)
-                    else:
-                        lbl.config(fg=text)
-                except Exception:
-                    pass
-
-            style_gn_label(self.range_label, getattr(self, "range_status", None))
-            style_gn_label(self.weather_label, getattr(self, "weather", None))
-            style_gn_label(self.vehicle_label, getattr(self, "vehicle", None))
-
-            # Buttons: invert colors depending on mode
-            # dark mode -> buttons white bg, black text
-            # light mode -> buttons black bg, white text
-            if mode == "dark":
-                btn_bg = "#FFFFFF"
-                btn_fg = "#000000"
-                active_bg = "#DDDDDD"
-            else:
-                btn_bg = "#000000"
-                btn_fg = "#FFFFFF"
-                active_bg = "#222222"
-
-            for btn in (
-                self.start_btn,
-                self.hold_btn,
-                self.resume_btn,
-                self.scrub_btn,
-                self.reset_btn,
-                self.settings_btn,
-            ):
-                try:
-                    # preserve scrub button's custom color (red) if set
-                    try:
-                        cur_fg = btn.cget("fg")
-                    except Exception:
-                        cur_fg = None
-                    if btn is getattr(self, "scrub_btn", None) and cur_fg:
-                        # keep existing foreground (usually red)
-                        btn.config(bg=btn_bg, activebackground=active_bg)
-                    else:
-                        btn.config(bg=btn_bg, fg=btn_fg, activebackground=active_bg)
-                except Exception:
-                    pass
-
-            # Manual toggle buttons
-            for btn in (
-                self.range_toggle_btn,
-                self.weather_toggle_btn,
-                self.vehicle_toggle_btn,
-            ):
-                try:
-                    btn.config(bg=btn_bg, fg=btn_fg)
-                except Exception:
-                    pass
-
-            # manual frame and footer
-            try:
-                self.manual_frame.config(bg=bg)
-                # Footer should invert colors depending on mode:
-                # - dark mode -> white background, black text
-                # - light mode -> black background, white text
-                mode = s.get("appearance_mode", "dark")
-                if mode == "dark":
-                    footer_bg = "#FFFFFF"
-                    footer_fg = "#000000"
-                else:
-                    footer_bg = "#000000"
-                    footer_fg = "#FFFFFF"
-                try:
-                    self.footer_label.config(bg=footer_bg, fg=footer_fg)
-                except Exception:
-                    # fall back to generic theme
-                    self.footer_label.config(bg=bg, fg=text)
-            except Exception:
-                pass
-        except Exception:
-            pass
-        # Recursively theme frames and common widgets so no frame is left with old colors
-        try:
-            self._theme_recursive(self.root, bg, text, btn_bg, btn_fg)
-        except Exception:
-            pass
-
-    def update_gn_labels(self, range_val, weather_val, vehicle_val):
-        """Update GN label texts and apply theme-aware styling."""
-        s = load_settings()
-        gn_px = int(s.get("gn_font_px", 28))
-        font_family = s.get("font_family", "Consolas")
-        bg = s.get("bg_color", "#000000")
-        text = s.get("text_color", "#FFFFFF")
-        gn_go = s.get("gn_go_color", "#00FF00")
-        gn_nogo = s.get("gn_nogo_color", "#FF0000")
-        # Range
-        try:
-            display_range = format_status_display(range_val)
-            self.range_label.config(
-                text=f"RANGE: {display_range}", bg=bg, font=(font_family, gn_px)
-            )
-            rv = (range_val or "").strip().upper()
-            rnorm = re.sub(r"[^A-Z]", "", rv)
-            if rnorm == "GO":
-                self.range_label.config(fg=gn_go)
-            elif rnorm == "NOGO":
-                self.range_label.config(fg=gn_nogo)
-            else:
-                self.range_label.config(fg=text)
-        except Exception:
-            pass
-
-        # Weather
-        try:
-            display_weather = format_status_display(weather_val)
-            self.weather_label.config(
-                text=f"WEATHER: {display_weather}", bg=bg, font=(font_family, gn_px)
-            )
-            color = get_status_color(weather_val)
-            self.weather_label.config(fg=color)
-        except Exception:
-            pass
-
-        # Vehicle
-        try:
-            display_vehicle = format_status_display(vehicle_val)
-            self.vehicle_label.config(
-                text=f"VEHICLE: {display_vehicle}", bg=bg, font=(font_family, gn_px)
-            )
-            vv = (vehicle_val or "").strip().upper()
-            vnorm = re.sub(r"[^A-Z]", "", vv)
-            if vnorm == "GO":
-                self.vehicle_label.config(fg=gn_go)
-            elif vnorm == "NOGO":
-                self.vehicle_label.config(fg=gn_nogo)
-            else:
-                self.vehicle_label.config(fg=text)
-        except Exception:
-            pass
-
-    def _theme_recursive(self, widget, bg, text, btn_bg, btn_fg):
-        # load settings so we can theme GN label backgrounds if configured
-        s = load_settings()
-        for child in widget.winfo_children():
-            # Frame and LabelFrame
-            try:
-                if isinstance(child, (tk.Frame, tk.LabelFrame)):
-                    try:
-                        child.config(bg=bg)
-                    except Exception:
-                        pass
-                # Labels: set bg, but don't override GN label fg
-                if isinstance(child, tk.Label):
-                    try:
-                        # preserve GN label fg colors and don't override the footer label (it has a special inverted style)
-                        if child in (
-                            getattr(self, "range_label", None),
-                            getattr(self, "weather_label", None),
-                            getattr(self, "vehicle_label", None),
-                        ):
-                            # GN labels keep fg but should have themed bg
-                            child.config(bg=s.get("gn_bg_color", bg))
-                        elif child is getattr(self, "footer_label", None):
-                            # footer_label was already styled by apply_appearance_settings; don't override it here
-                            pass
-                        else:
-                            child.config(bg=bg, fg=text)
-                    except Exception:
-                        pass
-                # Entries: avoid overriding entries that were explicitly styled (like mission_entry)
-                if isinstance(child, tk.Entry):
-                    try:
-                        # Set entry bg/fg depending on appearance mode
-                        mode_local = s.get("appearance_mode", "dark")
-                        if mode_local == "dark":
-                            child.config(bg="#222222", fg=text, insertbackground=text)
-                        else:
-                            # light mode entries should contrast with the white background
-                            child.config(
-                                bg="#b4b4b4", fg="#000000", insertbackground="#000000"
-                            )
-                    except Exception:
-                        pass
-                # OptionMenu/Menubutton
-                if isinstance(child, tk.Menubutton):
-                    try:
-                        child.config(bg=btn_bg, fg=btn_fg, activebackground="#555")
-                    except Exception:
-                        pass
-                # Radiobutton / Checkbutton
-                if isinstance(child, (tk.Radiobutton, tk.Checkbutton)):
-                    try:
-                        # selectcolor is the indicator background; set it to match the overall bg for neatness
-                        child.config(
-                            bg=bg, fg=text, selectcolor=bg, activebackground=bg
-                        )
-                    except Exception:
-                        pass
-                # Buttons: ensure themed background and correct fg
-                if isinstance(child, tk.Button):
-                    try:
-                        # don't override scrub button's fg if it has a special color
-                        if child is getattr(self, "scrub_btn", None):
-                            child.config(bg=btn_bg, activebackground="#555")
-                        else:
-                            child.config(bg=btn_bg, fg=btn_fg, activebackground="#555")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            # Recurse
-            try:
-                if hasattr(child, "winfo_children"):
-                    self._theme_recursive(child, bg, text, btn_bg, btn_fg)
-            except Exception:
-                pass
-
-    def show_appearance_window(self):
-        # Re-implemented appearance window with proper theming and layout
-        settings = load_settings()
-        win = tk.Toplevel(self.root)
-        win.transient(self.root)
-        win.title("Appearance")
-        win.geometry("520x475")
-
-        # derive colors from appearance_mode so the dialog matches the main UI
-        mode_local = settings.get("appearance_mode", "dark")
-        if mode_local == "dark":
-            win_bg = "#000000"
-            win_text = "#FFFFFF"
-            btn_bg = "#FFFFFF"
-            btn_fg = "#000000"
-            entry_bg = "#222"
-            entry_fg = "#FFFFFF"
-        else:
-            win_bg = "#FFFFFF"
-            win_text = "#000000"
-            btn_bg = "#000000"
-            btn_fg = "#FFFFFF"
-            entry_bg = "#b4b4b4"
-            entry_fg = "#000000"
-        win.config(bg=win_bg)
-
-        tk.Label(win, text="Choose UI mode:", fg=win_text, bg=win_bg).pack(
-            anchor="w", padx=12, pady=(10, 0)
-        )
-        mode_var = tk.StringVar(value=settings.get("appearance_mode", "dark"))
-        modes = ["dark", "light"]
-        mode_menu = tk.OptionMenu(win, mode_var, *modes)
-        mode_menu.config(fg=win_text, bg=entry_bg, activebackground="#333")
-        mode_menu.pack(anchor="w", padx=12, pady=6)
-
-        def on_save_mode():
-            choice = mode_var.get()
-            presets = {
-                "dark": {
-                    "bg_color": "#000000",
-                    "text_color": "#FFFFFF",
-                    "gn_bg_color": "#111111",
-                    "gn_border_color": "#FFFFFF",
-                    "gn_go_color": "#00FF00",
-                    "gn_nogo_color": "#FF0000",
-                    "font_family": "Consolas",
-                    "mission_font_px": 24,
-                    "timer_font_px": 80,
-                    "gn_font_px": 20,
-                },
-                "light": {
-                    "bg_color": "#FFFFFF",
-                    "text_color": "#000000",
-                    "gn_bg_color": "#EEEEEE",
-                    "gn_border_color": "#333333",
-                    "gn_go_color": "#008800",
-                    "gn_nogo_color": "#AA0000",
-                    "font_family": "Consolas",
-                    "mission_font_px": 24,
-                    "timer_font_px": 80,
-                    "gn_font_px": 20,
-                },
-            }
-            p = presets.get(choice, {})
-            s = load_settings()
-            s["appearance_mode"] = choice
-            s.update(p)
-            save_settings(s)
-            try:
-                self.apply_appearance_settings()
-                write_countdown_html(self.mission_name, self.text.cget("text"))
-                write_gonogo_html(self.gonogo_values)
-            except Exception:
-                pass
-            # close appearance window
-            win.destroy()
-            # also close the settings window if it is open
-            try:
-                if getattr(self, "settings_win", None):
-                    try:
-                        self.settings_win.destroy()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        def choose_color(entry_widget):
-            try:
-                col = colorchooser.askcolor()
-                if col and col[1]:
-                    entry_widget.delete(0, tk.END)
-                    entry_widget.insert(0, col[1])
-            except Exception:
-                pass
-
-        s = load_settings()
-        html_frame = tk.LabelFrame(
-            win, text="HTML appearance (streaming)", fg=win_text, bg=win_bg
-        )
-        html_frame.config(bg=win_bg)
-        html_frame.pack(fill="x", padx=8, pady=6)
-
-        # layout HTML appearance fields in a grid
-        tk.Label(html_frame, text="Background:", fg=win_text, bg=win_bg).grid(
-            row=0, column=0, sticky="w", padx=6, pady=4
-        )
-        bg_entry = tk.Entry(
-            html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        bg_entry.grid(row=0, column=1, padx=6, pady=4)
-        bg_entry.insert(0, s.get("html_bg_color", s.get("bg_color", "#000000")))
-        tk.Button(
-            html_frame,
-            text="Choose",
-            command=lambda: choose_color(bg_entry),
-            fg=btn_fg,
-            bg=btn_bg,
-        ).grid(row=0, column=2, padx=6)
-
-        tk.Label(html_frame, text="Text:", fg=win_text, bg=win_bg).grid(
-            row=1, column=0, sticky="w", padx=6, pady=4
-        )
-        text_entry = tk.Entry(
-            html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        text_entry.grid(row=1, column=1, padx=6, pady=4)
-        text_entry.insert(0, s.get("html_text_color", s.get("text_color", "#FFFFFF")))
-        tk.Button(
-            html_frame,
-            text="Choose",
-            command=lambda: choose_color(text_entry),
-            fg=btn_fg,
-            bg=btn_bg,
-        ).grid(row=1, column=2, padx=6)
-
-        tk.Label(html_frame, text="GN GO:", fg=win_text, bg=win_bg).grid(
-            row=2, column=0, sticky="w", padx=6, pady=4
-        )
-        gn_go_entry = tk.Entry(
-            html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        gn_go_entry.grid(row=2, column=1, padx=6, pady=4)
-        gn_go_entry.insert(
-            0, s.get("html_gn_go_color", s.get("gn_go_color", "#00FF00"))
-        )
-        tk.Button(
-            html_frame,
-            text="Choose",
-            command=lambda: choose_color(gn_go_entry),
-            fg=btn_fg,
-            bg=btn_bg,
-        ).grid(row=2, column=2, padx=6)
-
-        tk.Label(html_frame, text="GN NO-GO:", fg=win_text, bg=win_bg).grid(
-            row=3, column=0, sticky="w", padx=6, pady=4
-        )
-        gn_nogo_entry = tk.Entry(
-            html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        gn_nogo_entry.grid(row=3, column=1, padx=6, pady=4)
-        gn_nogo_entry.insert(
-            0, s.get("html_gn_nogo_color", s.get("gn_nogo_color", "#FF0000"))
-        )
-        tk.Button(
-            html_frame,
-            text="Choose",
-            command=lambda: choose_color(gn_nogo_entry),
-            fg=btn_fg,
-            bg=btn_bg,
-        ).grid(row=3, column=2, padx=6)
-
-        tk.Label(html_frame, text="GN box bg:", fg=win_text, bg=win_bg).grid(
-            row=4, column=0, sticky="w", padx=6, pady=4
-        )
-        gn_box_bg_entry = tk.Entry(
-            html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        gn_box_bg_entry.grid(row=4, column=1, padx=6, pady=4)
-        gn_box_bg_entry.insert(
-            0, s.get("html_gn_bg_color", s.get("gn_bg_color", "#111111"))
-        )
-        tk.Button(
-            html_frame,
-            text="Choose",
-            command=lambda: choose_color(gn_box_bg_entry),
-            fg=btn_fg,
-            bg=btn_bg,
-        ).grid(row=4, column=2, padx=6)
-
-        tk.Label(html_frame, text="GN border:", fg=win_text, bg=win_bg).grid(
-            row=5, column=0, sticky="w", padx=6, pady=4
-        )
-        gn_border_entry = tk.Entry(
-            html_frame, width=12, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        gn_border_entry.grid(row=5, column=1, padx=6, pady=4)
-        gn_border_entry.insert(
-            0, s.get("html_gn_border_color", s.get("gn_border_color", "#FFFFFF"))
-        )
-        tk.Button(
-            html_frame,
-            text="Choose",
-            command=lambda: choose_color(gn_border_entry),
-            fg=btn_fg,
-            bg=btn_bg,
-        ).grid(row=5, column=2, padx=6)
-
-        tk.Label(html_frame, text="Font family:", fg=win_text, bg=win_bg).grid(
-            row=6, column=0, sticky="w", padx=6, pady=4
-        )
-        font_entry = tk.Entry(
-            html_frame, width=20, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        font_entry.grid(row=6, column=1, padx=6, pady=4, columnspan=2, sticky="w")
-        font_entry.insert(
-            0, s.get("html_font_family", s.get("font_family", "Consolas"))
-        )
-
-        tk.Label(html_frame, text="Mission px:", fg=win_text, bg=win_bg).grid(
-            row=7, column=0, sticky="w", padx=6, pady=4
-        )
-        mission_px_entry = tk.Entry(
-            html_frame, width=6, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        mission_px_entry.grid(row=7, column=1, padx=6, pady=4, sticky="w")
-        mission_px_entry.insert(
-            0, str(s.get("html_mission_font_px", s.get("mission_font_px", 24)))
-        )
-
-        tk.Label(html_frame, text="Timer px:", fg=win_text, bg=win_bg).grid(
-            row=8, column=0, sticky="w", padx=6, pady=4
-        )
-        timer_px_entry = tk.Entry(
-            html_frame, width=6, fg=entry_fg, bg=entry_bg, insertbackground=entry_fg
-        )
-        timer_px_entry.grid(row=8, column=1, padx=6, pady=4, sticky="w")
-        timer_px_entry.insert(
-            0, str(s.get("html_timer_font_px", s.get("timer_font_px", 80)))
-        )
-
-        # Add a checkbox to hide mission name in HTML output
-        self.hide_mission_name_var = tk.BooleanVar(
-            value=s.get("hide_mission_name", False)
-        )
-        hide_mission_name_cb = tk.Checkbutton(
-            html_frame,
-            text="Hide mission name in HTML output",
-            variable=self.hide_mission_name_var,
-            fg=win_text,
-            bg=win_bg,
-            selectcolor=win_bg,
-            activebackground=win_bg,
-        )
-
-        hide_mission_name_cb.grid(
-            row=9, column=0, columnspan=3, sticky="w", padx=6, pady=4
-        )
-
-        def save_html_prefs():
-            try:
-                s_local = load_settings()
-                s_local["html_bg_color"] = bg_entry.get().strip() or s_local.get(
-                    "html_bg_color"
-                )
-                s_local["html_text_color"] = text_entry.get().strip() or s_local.get(
-                    "html_text_color"
-                )
-                s_local["html_gn_go_color"] = gn_go_entry.get().strip() or s_local.get(
-                    "html_gn_go_color"
-                )
-                s_local["html_gn_nogo_color"] = (
-                    gn_nogo_entry.get().strip() or s_local.get("html_gn_nogo_color")
-                )
-                s_local["html_gn_bg_color"] = (
-                    gn_box_bg_entry.get().strip() or s_local.get("html_gn_bg_color")
-                )
-                s_local["html_gn_border_color"] = (
-                    gn_border_entry.get().strip() or s_local.get("html_gn_border_color")
-                )
-                s_local["html_font_family"] = font_entry.get().strip() or s_local.get(
-                    "html_font_family"
-                )
-                s_local["hide_mission_name"] = self.hide_mission_name_var.get()
-                try:
-                    s_local["html_mission_font_px"] = int(mission_px_entry.get())
-                except Exception:
-                    pass
-                try:
-                    s_local["html_timer_font_px"] = int(timer_px_entry.get())
-                except Exception:
-                    pass
-                save_settings(s_local)
-                write_countdown_html(self.mission_name, self.text.cget("text"))
-                write_gonogo_html(self.gonogo_values)
-            except Exception:
-                pass
-
-        def reset_html_defaults():
-            try:
-                s_local = load_settings()
-                s_local["html_bg_color"] = DEFAULT_SETTINGS.get("html_bg_color")
-                s_local["html_text_color"] = DEFAULT_SETTINGS.get("html_text_color")
-                s_local["html_font_family"] = DEFAULT_SETTINGS.get("html_font_family")
-                s_local["html_mission_font_px"] = DEFAULT_SETTINGS.get(
-                    "html_mission_font_px"
-                )
-                s_local["html_timer_font_px"] = DEFAULT_SETTINGS.get(
-                    "html_timer_font_px"
-                )
-                s_local["html_gn_bg_color"] = DEFAULT_SETTINGS.get("html_gn_bg_color")
-                s_local["html_gn_border_color"] = DEFAULT_SETTINGS.get(
-                    "html_gn_border_color"
-                )
-                s_local["html_gn_go_color"] = DEFAULT_SETTINGS.get("html_gn_go_color")
-                s_local["html_gn_nogo_color"] = DEFAULT_SETTINGS.get(
-                    "html_gn_nogo_color"
-                )
-                s_local["html_gn_font_px"] = DEFAULT_SETTINGS.get("html_gn_font_px")
-                save_settings(s_local)
-                # update UI fields
-                bg_entry.delete(0, tk.END)
-                bg_entry.insert(0, s_local["html_bg_color"])
-                text_entry.delete(0, tk.END)
-                text_entry.insert(0, s_local["html_text_color"])
-                gn_go_entry.delete(0, tk.END)
-                gn_go_entry.insert(0, s_local["html_gn_go_color"])
-                gn_nogo_entry.delete(0, tk.END)
-                gn_nogo_entry.insert(0, s_local["html_gn_nogo_color"])
-                gn_box_bg_entry.delete(0, tk.END)
-                gn_box_bg_entry.insert(0, s_local["html_gn_bg_color"])
-                gn_border_entry.delete(0, tk.END)
-                gn_border_entry.insert(0, s_local["html_gn_border_color"])
-                font_entry.delete(0, tk.END)
-                font_entry.insert(0, s_local["html_font_family"])
-                mission_px_entry.delete(0, tk.END)
-                mission_px_entry.insert(0, str(s_local["html_mission_font_px"]))
-                timer_px_entry.delete(0, tk.END)
-                timer_px_entry.insert(0, str(s_local["html_timer_font_px"]))
-                write_countdown_html(self.mission_name, self.text.cget("text"))
-                write_gonogo_html(self.gonogo_values)
-            except Exception:
-                pass
-
-        html_btns = tk.Frame(html_frame, bg=win_bg)
-        html_btns.grid(row=10, column=0, columnspan=3, pady=6)
-        tk.Button(
-            html_btns,
-            text="Save (HTML only)",
-            command=save_html_prefs,
-            fg=btn_fg,
-            bg=btn_bg,
-        ).pack(side="right", padx=6)
-        tk.Button(
-            html_btns,
-            text="Reset HTML defaults",
-            command=reset_html_defaults,
-            fg=btn_fg,
-            bg=btn_bg,
-        ).pack(side="right")
-
-        btn_frame = tk.Frame(win, bg=win_bg)
-        btn_frame.pack(fill="x", pady=8, padx=8)
-        tk.Button(
-            btn_frame, text="Save", command=on_save_mode, fg=btn_fg, bg=btn_bg
-        ).pack(side="right", padx=6)
-        tk.Button(
-            btn_frame, text="Cancel", command=win.destroy, fg=btn_fg, bg=btn_bg
-        ).pack(side="right")
-
-        try:
-            self._theme_recursive(win, win_bg, win_text, btn_bg, btn_fg)
-        except Exception:
-            pass
-
-    def _toggle_manual(self, which):
-        # get current values (Range, Weather, Vehicle)
-        cur = fetch_gonogo()
-        # map which to index
-        idx_map = {"range": 0, "weather": 1, "vehicle": 2}
-        idx = idx_map.get(which, 0)
-        try:
-            cur_val = (cur[idx] or "").strip().upper()
-        except Exception:
-            cur_val = "N/A"
-        # toggle: if GO -> NOGO, else -> GO
-        new_val = "NO-GO" if cur_val == "GO" else "GO"
-        self.set_manual(which, new_val)
-
-    
-    def start(self):
-        self.mission_name = self.mission_entry.get().strip() or "Placeholder Mission"
-        self.running = True
-        self.on_hold = False
+        self.hold = False
         self.scrubbed = False
-        self.show_hold_button()
-        self._auto_hold_triggered = set()
+        self.scrub_label = ""
+        self.hold_start_time = None
 
+        self.statuses = {"WEATHER": 0, "RANGE": 0, "VEHICLE": 0}
+        self.auto_hold = False
+
+        self.settings = settings.defaults
+
+        self.load_settings()
+
+        self.target_set = dpg.get_value("target_in")
+    
+    # Function to load settings and update approapriate values
+    def load_settings(self):
+        settings.load()
+        self.update_auto_hold_thres()
+        self.update_min_hold_reset()
+
+    # Function to update the auto hold time
+    def update_auto_hold_thres(self):
         try:
-            if self.mode_var.get() == "duration":
-                h = int(self.hours_entry.get())
-                m = int(self.minutes_entry.get())
-                s = int(self.seconds_entry.get())
-                total_seconds = h * 3600 + m * 60 + s
-            else:
-                now = datetime.now()
-                h = int(self.clock_hours_entry.get() or 0)
-                m = int(self.clock_minutes_entry.get() or 0)
-                s = int(self.clock_seconds_entry.get() or 0)
+            h, m, s = map(int, self.settings["auto_hold_time"].split(":"))
+            self.auto_hold_thres = h * 3600 + m * 60 + s
+        except:
+            self.auto_hold_thres = 0
 
-                ssettings = load_settings()
-                tzname = ssettings.get("timezone", DEFAULT_SETTINGS.get("timezone", "local"))
+    # Function to update the minimum time the clock is set to after a hold
+    def update_min_hold_reset(self):
+        try:
+            h, m, s = map(int, self.settings["min_hold_reset"].split(":"))
+            self.min_hold_reset_thres = h * 3600 + m * 60 + s
+        except:
+            self.min_hold_reset_thres = 0
+    
+    # Function to toggle any window
+    def toggle_window(self, tag):
+        if dpg.is_item_shown(tag):
+            dpg.hide_item(tag)
+        else:
+            dpg.show_item(tag)
 
-                if ZoneInfo is None or tzname in (None, "", "local"):
-                    target_today = now.replace(hour=h, minute=m, second=s, microsecond=0)
-                    if target_today <= now:
-                        target_today = target_today + timedelta(days=1)
-                    total_seconds = (target_today - now).total_seconds()
-                else:
-                    try:
-                        tz = ZoneInfo(tzname)
-                        now_tz = datetime.now(tz)
-                        target = now_tz.replace(hour=h, minute=m, second=s, microsecond=0)
-                        if target <= now_tz:
-                            target = target + timedelta(days=1)
-                        total_seconds = (target - now_tz).total_seconds()
-                    except Exception:
-                        target_today = now.replace(hour=h, minute=m, second=s, microsecond=0)
-                        if target_today <= now:
-                            target_today = target_today + timedelta(days=1)
-                        total_seconds = (target_today - now).total_seconds()
-        except Exception:
-            self.text.config(text="Invalid time")
-            write_countdown_html(self.mission_name, "Invalid time")
-            return
-
-        now_time = time.time()
-        mode = self.count_mode.get()
-
-        if mode in ("T-", "L-"):
-            # countdown
-            self.target_time = now_time + total_seconds
-            self.counting_up = False
-            self.remaining_time = total_seconds
-        elif mode in ("T+", "L+"):
-            # count up
-            self.target_time = now_time - total_seconds
-            self.counting_up = True
-            self.remaining_time = total_seconds
-
-        # Immediately update display
-        #self.update_clock()
-
-
-    def hold(self):
-        if self.running and not self.on_hold and not self.scrubbed:
-            self.on_hold = True
-            self.hold_start_time = time.time()
-            self.remaining_time = max(0, self.target_time - self.hold_start_time)
-            self.show_resume_button()
-
-    def resume(self):
-        if self.running and self.on_hold and not self.scrubbed:
-            self.on_hold = False
-            self.target_time = time.time() + self.remaining_time
-            self.show_hold_button()
-
-    def show_hold_button(self):
-        self.resume_btn.grid_remove()
-        self.hold_btn.grid()
-
-    def show_resume_button(self):
-        self.hold_btn.grid_remove()
-        self.resume_btn.grid()
-
-    def scrub(self):
-        self.scrubbed = True
-        self.running = False
-        write_countdown_html(self.mission_name, "SCRUB")
-        self.text.config(text="SCRUB")
-
+    
+    # Function to toggle the countdown prefix (T- / L-)
+    def toggle_countdown_prefix(self):
+        self.settings["prefix"] = "L-" if self.settings["prefix"] == "T-" else "T-"
+        if not self.running or (self.target_time and (self.target_time - datetime.now()).total_seconds() > 0):
+            dpg.set_value("prefix_text", self.settings["prefix"])
+    
+    # Function to reset everything to load
     def reset(self):
         self.running = False
-        self.on_hold = False
+        self.target_time = None
+        self.hold = False
         self.scrubbed = False
-        self.counting_up = False
+        self.hold_start_time = None
 
-        prefix = self.count_mode.get() if hasattr(self, "count_mode") else "T-"
-        reset_text = f"{prefix}00:00:00"
-
-        self.text.config(text=reset_text)
-        write_countdown_html(self.mission_name, reset_text)
-        self.show_hold_button()
-
-    # ----------------------------
-    # Clock updating
-    # ----------------------------
-    def format_time(self, seconds, prefix="T-"):
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        s = int(seconds % 60)
-        return f"{prefix}{h:02}:{m:02}:{s:02}"
+        dpg.set_value("prefix_text", self.settings["prefix"])
+        dpg.set_value("countdown_text", "00:00:00")
+        dpg.configure_item("countdown_text", color=(255, 255, 255))
     
-    # Countdown mode toggle
-    def toggle_count_mode(self):
-        current = self.count_mode.get()
-        next_mode = {
-            "T-": "L-",
-            "T+": "L+",
-            "L-": "T-",
-            "L+": "T+",
-        }.get(current, "T-")
-        self.count_mode.set(next_mode)
-        if not self.running:
-            self.reset()
+    # Function to toggle a hold
+    def toggle_hold(self):
+        if not self.running or self.scrubbed:
+            return
+        
+        diff_sec = (self.target_time - datetime.now()).total_seconds()
 
-    def update_clock(self):
-        now_time = time.time()
-
-        # Update timer
-        if self.running and not self.scrubbed:
-            if self.on_hold:
-                elapsed = int(now_time - self.hold_start_time)
-                timer_text = self.format_time(elapsed, "H+")
-            elif self.target_time:
-                diff = int(self.target_time - now_time)
-                # auto-hold detection: if configured times include this remaining value, enter hold
-                try:
-                    s = load_settings()
-                    ah = set(int(x) for x in s.get("auto_hold_times", []) or [])
-                except Exception:
-                    ah = set()
-                if diff in ah and diff not in getattr(
-                    self, "_auto_hold_triggered", set()
-                ):
-                    # trigger hold
-                    self._auto_hold_triggered.add(diff)
-                    self.hold()
-                    # show_hold_button/other UI changes handled by hold()
-                    # After entering hold, update countdown display via next tick
-
-                if diff <= 0 and not self.counting_up:
-                    self.counting_up = True
-                    self.target_time = now_time
-                    diff = 0
-                if self.counting_up:
-                    elapsed = int(now_time - self.target_time)
-                    prefix = self.count_mode.get()
-
-                    # Flip mode from T-/L- to T+/L+ if needed
-                    if prefix == "T-":
-                        self.count_mode.set("T+")
-                    elif prefix == "L-":
-                        self.count_mode.set("L+")
-
-                    prefix = self.count_mode.get()
-                    timer_text = self.format_time(elapsed, prefix)
-                else:
-                    prefix = self.count_mode.get()
-                    timer_text = self.format_time(diff, prefix)
-            else:
-                prefix = self.count_mode.get()
-                timer_text = self.format_time(diff, prefix)
-        else:
-            timer_text = self.text.cget("text")
-
-        self.text.config(text=timer_text)
-        write_countdown_html(self.mission_name, timer_text)
-
-        # Update Go/No-Go every 10 seconds
-        if now_time - self.last_gonogo_update > 0.1:
-            # fetch_gonogo returns [Range, Weather, Vehicle]
-            self.range_status, self.weather, self.vehicle = fetch_gonogo()
-            # update texts and styles using theme
-            try:
-                self.update_gn_labels(self.range_status, self.weather, self.vehicle)
-            except Exception:
-                # fallback to simple config
-                self.range_label.config(text=f"RANGE: {self.range_status}")
-                self.weather_label.config(text=f"WEATHER: {self.weather}")
-                self.vehicle_label.config(text=f"VEHICLE: {self.vehicle}")
-            self.gonogo_values = [self.range_status, self.weather, self.vehicle]
-            write_gonogo_html(self.gonogo_values)
-            self.last_gonogo_update = now_time
-
-        # Update Major Concerns on a configurable interval
-        try:
-            s = load_settings()
-            interval = float(s.get("concerns_update_interval", DEFAULT_SETTINGS.get("concerns_update_interval", 10)))
-        except Exception:
-            interval = DEFAULT_SETTINGS.get("concerns_update_interval", 10)
-
-        if now_time - getattr(self, "last_concerns_update", 0) > interval:
-            try:
-                concerns = fetch_major_concerns()
-                # update runtime state and HTML
-                self.major_concerns = concerns
-                write_major_concerns_html(concerns)
-                # update GUI label concisely
-                try:
-                    display = ", ".join(concerns) if isinstance(concerns, (list, tuple)) else str(concerns)
-                    # shorten if very long
-                    if len(display) > 200:
-                        display = display[:197] + "..."
-                    self.concerns_label.config(text=f"Major Concerns: {display}")
-                except Exception:
-                    pass
-            except Exception as e:
-                print(f"[DEBUG] failed to refresh major concerns: {e}")
-            self.last_concerns_update = now_time
-
-        self.root.after(200, self.update_clock)
-
-
-if __name__ == "__main__":
-    # Show a small splash/loading GUI while we fetch initial data and write HTML files.
-    def show_splash_and_start():
-        splash = tk.Tk()
-        splash.title("RocketLaunchCountdown — Initialaization")
-        splash.config(bg="black")
-        splash.geometry("400x175")
-        splash.attributes("-topmost", True)
-
-        title = tk.Label(
-            splash,
-            text="RocketLaunchCountdown",
-            fg="white",
-            bg="black",
-            font=("Arial", 20, "bold"),
-        )
-        title.pack(pady=(10, 0))
-
-        lbl = tk.Label(
-            splash,
-            text="Loading resources...",
-            fg="white",
-            bg="black",
-            font=("Arial", 14),
-        )
-        lbl.pack(pady=(0, 5))
-
-        info = tk.Label(
-            splash,
-            text="Fetching Go/No-Go and preparing HTML files.",
-            fg="#ccc",
-            bg="black",
-            font=("Arial", 10),
-        )
-        info.pack()
-
-        cont_btn = tk.Button(splash, text="Continue", state="disabled", width=12)
-        cont_btn.pack(pady=8)
-
-        # Footer
-        footer_frame = tk.Frame(splash, bg="black")
-        footer_frame.pack(side="bottom", pady=0, fill="x")
-
-        # Footer uses inverted colors: white bg/black text in dark mode, black bg/white text in light mode
-        s = load_settings()
-        splash_mode = s.get("appearance_mode", "dark")
-        if splash_mode == "dark":
-            splash_footer_bg = "#FFFFFF"
-            splash_footer_fg = "#000000"
-        else:
-            splash_footer_bg = "#000000"
-            splash_footer_fg = "#FFFFFF"
-
-        footer_label = tk.Label(
-            footer_frame,
-            text="Made by HamsterSpaceNerd3000",
-            font=("Consolas", 12),
-            fg=splash_footer_fg,
-            bg=splash_footer_bg,
-        )
-        footer_label.pack(fill="x")
-
-        # Shared flag to indicate initialization complete
-        init_state = {"done": False, "error": None}
-
-        def init_worker():
-            try:
-                # perform the same initial writes you had before
-                gonogo = fetch_gonogo()
-                write_countdown_html("Placeholder Mission", "T-00:00:00")
-                write_gonogo_html(gonogo)
-                init_state["done"] = True
-            except Exception as e:
-                init_state["error"] = str(e)
-                init_state["done"] = True
-
-        # Start background initialization
-        threading.Thread(target=init_worker, daemon=True).start()
-
-        def check_init():
-            if init_state["done"]:
-                if init_state["error"]:
-                    info.config(text=f"Initialization error: {init_state['error']}")
-                else:
-                    # show a visible countdown before auto-start; allow Continue to skip
-                    AUTO_START_SECONDS = 5
-                    remaining = AUTO_START_SECONDS
-                    cont_btn.config(state="normal")
-
-                    def tick():
-                        nonlocal remaining
-                        if remaining <= 0:
-                            on_continue()
-                            return
-                        info.config(text=f"Ready — auto-starting in {remaining}...")
-                        cont_btn.config(text=f"Continue ({remaining})")
-                        remaining -= 1
-                        splash.after(1000, tick)
-
-                    # clicking Continue will immediately proceed
-                    cont_btn.config(command=on_continue)
-                    tick()
+        if not self.hold:
+            # Start hold
+            if diff_sec <= 0:
                 return
-            splash.after(200, check_init)
 
-        def on_continue():
-            splash.destroy()
-            # now create the real main window
-            root = tk.Tk()
-            app = CountdownApp(root)
-            root.mainloop()
+            # Time recycle check
+            if diff_sec < self.min_hold_reset_thres:
+                self.target_time = datetime.now() + datetime.timedelta(seconds=self.min_hold_reset_thres)
+            
+            self.hold = True
+            self.hold_start_time = datetime.now()
+        else:
+            hold_duration = datetime.now() - self.hold_start_time
+            self.target_time += hold_duration
+            self.hold = False
 
-        # begin polling
-        splash.after(100, check_init)
-        splash.mainloop()
+    # Function to trigger a scrub
+    def trigger_scrub(self):
+        if self.target_time:
+            diff_sec = (self.target_time - datetime.now()).total_seconds()
+            self.scrub_label = "RUD" if diff_sec <= 0 else "SCRUB"
+        else:
+            self.scrub_label = "SCRUB"
+        
+        self.scrubbed, self.running, self.hold = True, False, False
 
-    show_splash_and_start()
+    # Function to cycle status
+    def cycle_status(self, key):
+        self.statuses[key] = (self.statuses[key] + 1) % 3
+        self.update_status_gui(key, self.statuses[key]) 
+    
+    # Function to update the go-nogo statuses
+    def update_status_gui(self, key, idx):
+        labels = ["NO-GO", "GO", "N/A"]
+        colors = [(255, 0, 0), (0, 255, 0), (128, 128, 128)]
+
+        tag = f"{key.lower()}_status_text"
+
+        if not dpg.does_item_exist(tag):
+            return
+
+        dpg.set_value(tag, labels[idx])
+        dpg.configure_item(tag, color=colors[idx])
+
+    
+    def start_countdown(self):
+        ch.start_countdown(self)
+    
+    # Logic update function
+    def update(self):
+        if dpg.does_item_exist("countdown_text"):
+            window_width = dpg.get_item_width("countdown")
+        else:
+            window_width = 800
+        controls_width = dpg.get_item_width("Controls") or 400
+        is_touch = self.settings["touch_screen"]
+
+        box_w, main_h = (window_width - 60) / 3, (100 if is_touch else 60)
+        box_h = box_w * 0.50
+
+        for item in ["weather", "range", "vehicle"]:
+            tag = f"{item}_box"
+            if dpg.does_item_exist(tag):
+                dpg.configure_item(tag, width=int(box_w), height=int(box_h))
+        
+        if dpg.does_item_exist("start_button"):
+            for btn in ["start_button", "hold_button", "scrub_button", "reset_button"]:
+                dpg.configure_item(btn, height=main_h)
+            
+            btn_w = (controls_width - 35) / 3
+            for btn in ["btn_w_manual", "btn_r_manual", "btn_v_manual"]:
+                dpg.configure_item(btn, width=int(btn_w), height=(80 if is_touch else 40))
+        
+        if self.settings["show_mission"] and dpg.does_item_exist("mission_title"):
+            m_size = dpg.get_text_size(dpg.get_value("mission_title"), font=fonts.get("large", 0))
+            if m_size:
+                dpg.set_item_indent("mission_title", max(0, int((window_width / 2) - (m_size[0] / 2) + self.settings["centering_offset"])))
+        
+        if dpg.does_item_exist("count_group"):
+            count_text = f"{dpg.get_value('prefix_text')} {dpg.get_value('countdown_text')}"
+            count_size = dpg.get_text_size(count_text, font=fonts.get("huge", 0))
+            if count_size:
+                dpg.set_item_indent("count_group", max(0, int((window_width/2) - (count_size[0]/2) + self.settings["centering_offset"])))
+        
+        # Center status text items
+        for item in ["weather", "range", "vehicle"]:
+            name_tag = f"{item}_name_text"
+            status_tag = f"{item}_status_text"
+            if dpg.does_item_exist(name_tag):
+                name_size = dpg.get_text_size(dpg.get_value(name_tag), font=fonts.get("status", 0))
+                if name_size:
+                    box_tag = f"{item}_box"
+                    box_width = dpg.get_item_width(box_tag) or 250
+                    indent = max(0, int(((box_width / 2) - (name_size[0] / 2)) * 0.9))
+                    dpg.set_item_indent(name_tag, indent)
+            if dpg.does_item_exist(status_tag):
+                status_size = dpg.get_text_size(dpg.get_value(status_tag), font=fonts.get("status", 0))
+                if status_size:
+                    box_tag = f"{item}_box"
+                    box_width = dpg.get_item_width(box_tag) or 250
+                    indent = max(0, int(((box_width / 2) - (status_size[0] / 2)) * 0.9))
+                    dpg.set_item_indent(status_tag, indent)
+        
+        if self.scrubbed:
+            dpg.set_value("prefix_text", ""); dpg.set_value("countdown_text", self.scrub_label)
+            dpg.configure_item("countdown_text", color=(255, 0, 0))
+        
+        elif self.hold:
+            dpg.set_value("prefix_text", "H+")
+            dpg.set_value("countdown_text", self.format_time(int((datetime.now() - self.hold_start_time).total_seconds())))
+        
+        elif self.running:
+            prefix, display_val = ch.run_countdown(self)
+            dpg.set_value("prefix_text", prefix)
+            dpg.set_value("countdown_text", self.format_time(display_val))
+    
+    # Function to format time
+    def format_time(self, seconds):
+        ts = int(seconds)
+        return f"{ts//3600:02}:{(ts%3600)//60:02}:{ts%60:02}"
+
+state = CountdownMain()
+
+# Font handling
+fonts = {}
+with dpg.font_registry():
+    try:
+        font_p = "C:/Windows/Fonts/consola.ttf"
+        fonts["huge"], fonts["large"], fonts["status"] = dpg.add_font(font_p, 120), dpg.add_font(font_p, 60), dpg.add_font(font_p, 40)
+    except:
+        pass
+
+# Function to apply theme before creating windows
+def apply_theme():
+    bg, border = [c * 255 for c in state.settings["box_bg_color"]], [c * 255 for c in state.settings["box_outline"]]
+    with dpg.theme() as t:
+        with dpg.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, bg); dpg.add_theme_color(dpg.mvThemeCol_Border, border)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, state.settings["box_border_width"])
+    for tag in ["weather_box", "range_box", "vehicle_box", "concerns_box"]:
+        if dpg.does_item_exist(tag):
+            dpg.bind_item_theme(tag, t)
+
+def select_display(display_type):
+    dw  = DisplayWindow()
+    if display_type == "countdown":
+        dw.countdown_display()
+    elif display_type == "status":
+        dw.status_display()
+    elif display_type == "concerns":
+        dw.concerns_display()
+    
+    dpg.configure_item("window_select", show=False)
+
+# Display window class
+class DisplayWindow:
+    def __init__(self):
+        self.window_width = 800
+        self.window_x = 415
+    
+    # Countdown display window
+    def countdown_display(self):
+        with dpg.window(label="Countdown Clock", tag="countdown", width=self.window_width, height=150, pos=[self.window_x, 0]):
+            dpg.add_text(state.settings["mission_name"], tag="mission_title", show=state.settings["show_mission"])
+            if "large" in fonts:
+                dpg.bind_item_font("mission_title", fonts["large"])
+            
+            # Countdown group
+            count_group_tag = "count_group"
+            with dpg.group(horizontal=True, tag=count_group_tag):
+                dpg.add_text(state.settings["prefix"], tag="prefix_text")
+                dpg.add_text("00:00:00", tag="countdown_text")
+                if "huge" in fonts:
+                    dpg.bind_item_font("prefix_text", fonts["huge"])
+                    dpg.bind_item_font("countdown_text", fonts["huge"])
+    
+    # Status display window
+    def status_display(self):
+        with dpg.window(label="Status Display", tag="status_display", width=self.window_width, height=250, pos=[self.window_x, 310]):
+            with dpg.group(horizontal=True):
+                for item in ["WEATHER", "RANGE", "VEHICLE"]:
+
+                    box_tag = f"{item.lower()}_box"
+                    name_tag = f"{item.lower()}_name_text"
+                    status_tag = f"{item.lower()}_status_text"
+                    
+                    with dpg.child_window(tag=box_tag, width=-1, height=-1):
+                        dpg.add_text(f"{item}", tag=name_tag)
+                        dpg.add_text("NO-GO", tag=status_tag)
+                        if "status" in fonts:
+                            dpg.bind_item_font(name_tag, fonts["status"])
+                            dpg.bind_item_font(status_tag, fonts["status"])
+    
+    # Major concerns display window
+    def concerns_display(self):
+        with dpg.window(label="Major Concerns Display", tag="concerns_display", width=self.window_width, height=125, pos=[self.window_x, 570]):
+            dpg.add_text("MAJOR CONCERNS: ")
+            with dpg.child_window(tag="concerns_box", width=-1, height=100):
+                c_txt = dpg.add_text(state.settings["manual_concerns"], tag="concerns_text")
+                if "status" in fonts:
+                    dpg.bind_item_font(c_txt, fonts["status"])
+
+# Control window
+with dpg.window(label="Controls", tag="Controls", width=415, height=525, pos=[0, 0]):
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="ADD DISPLAY", tag="add_display_button", width=195, height=40, callback=lambda: dpg.configure_item("window_select", show=True))
+        dpg.add_button(label="SETTINGS", width=195, height=40, callback=lambda: state.toggle_window("SettingsWin"))
+    dpg.add_separator()
+    with dpg.group(horizontal=True):
+        dpg.add_input_text(label="MISSION NAME", width=200, default_value=state.settings["mission_name"], callback=lambda s, a: (state.settings.update({"mission_name": a}), dpg.set_value("mission_title", a)))
+        dpg.add_button(label="T-/L-", width=-1, callback=state.toggle_countdown_prefix)
+    dpg.add_checkbox(label="SHOW MISSION NAME", default_value=state.settings["show_mission"], callback=lambda s, a: (state.settings.update({"show_mission": a}), dpg.configure_item("mission_title", show=a)))
+    dpg.add_separator()
+    dpg.add_input_text(tag="target_in", hint="Enter Countdown (HH:MM:SS)", width=-1)
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="START", tag="start_button", width=195, callback=state.start_countdown)
+        dpg.add_button(label="HOLD/RESUME", tag="hold_button", width=195, callback=state.toggle_hold)
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="SCRUB", tag="scrub_button", width=195, callback=state.trigger_scrub)
+        dpg.add_button(label="RESET", tag="reset_button", width=195, callback=state.reset)
+    dpg.add_spacer(height=5)
+    dpg.add_separator()
+    dpg.add_text("MANUAL STATUS")
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="WEATHER", tag="btn_w_manual", width=125, callback=lambda: state.cycle_status("WEATHER"))
+        dpg.add_button(label="RANGE", tag="btn_r_manual", width=125, callback=lambda: state.cycle_status("RANGE"))
+        dpg.add_button(label="VEHICLE", tag="btn_v_manual", width=125, callback=lambda: state.cycle_status("VEHICLE"))
+    with dpg.group(horizontal=True):
+        dpg.add_text("MAJOR CONCERNS")
+        dpg.add_input_text(tag="concerns_in", width=-1, default_value=state.settings["manual_concerns"], callback=lambda s, a: (state.settings.update({"manual_concerns": a}), dpg.set_value("concerns_text", a)))
+    dpg.add_spacer(height=5)
+    dpg.add_separator()
+    dpg.add_text("AUTO-HOLD SETTINGS")
+    dpg.add_checkbox(label="ENABLE AUTO-HOLD", default_value=state.auto_hold, callback=lambda s, a: setattr(state, "auto_hold", a))
+    with dpg.group(horizontal=True):
+        dpg.add_text("Hold At (HH:MM:SS)")
+        dpg.add_input_text(default_value=state.settings["auto_hold_time"], width=-1, callback=lambda s, a: (state.settings.update({"auto_hold_time": a}), state.update_auto_hold_thres()))
+    with dpg.group(horizontal=True):
+        dpg.add_text("Min Hold Reset (HH:MM:SS)")
+        dpg.add_input_text(default_value=state.settings["min_hold_reset"], width=-1, callback=lambda s, a: (state.settings.update({"min_hold_reset": a}), state.update_min_hold_reset()))
+
+# Window select popup
+with dpg.popup(parent="add_display_button", mousebutton=dpg.mvMouseButton_Left, tag="window_select"):
+    dpg.add_text("Select Display Type:")
+    dpg.add_separator()
+    dpg.add_button(label="COUNTDOWN CLOCK", callback=lambda: select_display("countdown"))
+    dpg.add_button(label="STATUS DISPLAY", callback=lambda: select_display("status"))
+    dpg.add_button(label="CONCERNS DISPLAY", callback=lambda: select_display("concerns"))
+
+# Settings window
+with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=[0, 525], show=False):
+   dpg.add_checkbox(label="TOUCH SCREEN", default_value=state.settings["touch_screen"], callback=lambda s, a: state.settings.update({"touch_screen": a}))
+   dpg.add_slider_int(label="Nudge", default_value=state.settings["centering_offset"], min_value=-100, max_value=100, callback=lambda s, a: state.settings.update({"centering_offset": a}))
+   dpg.add_color_edit(label="Box Background Color", default_value=state.settings["box_bg_color"], callback=lambda s, a: (state.settings.update({"box_bg_color": a}), apply_theme()))
+   dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], callback=lambda s, a: (state.settings.update({"box_outline": a}), apply_theme()))
+   dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
+
+# DPG wrap up
+dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+apply_theme()
+for key in state.statuses:
+    state.update_status_gui(key, state.statuses[key])
+while dpg.is_dearpygui_running():
+    state.update()
+    dpg.render_dearpygui_frame()
+dpg.destroy_context()
