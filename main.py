@@ -3,7 +3,7 @@
 # Imports
 import dearpygui.dearpygui as dpg
 import settings
-from datetime import datetime
+from datetime import datetime, timedelta
 import countdown_handler as ch
 
 # DPG init
@@ -92,7 +92,7 @@ class CountdownMain:
 
             # Time recycle check
             if diff_sec < self.min_hold_reset_thres:
-                self.target_time = datetime.now() + datetime.timedelta(seconds=self.min_hold_reset_thres)
+                self.target_time = datetime.now() + timedelta(seconds=self.min_hold_reset_thres)
             
             self.hold = True
             self.hold_start_time = datetime.now()
@@ -131,6 +131,7 @@ class CountdownMain:
 
     
     def start_countdown(self):
+        self.target_set = dpg.get_value("target_in")
         ch.start_countdown(self)
     
     # Logic update function
@@ -145,10 +146,14 @@ class CountdownMain:
         box_w, main_h = (window_width - 60) / 3, (100 if is_touch else 60)
         box_h = box_w * 0.50
 
+        # Status boxes have fixed width of 210 in the status_display
+        status_box_w = 210
+        status_box_h = 225 * 0.5
+        
         for item in ["weather", "range", "vehicle"]:
             tag = f"{item}_box"
             if dpg.does_item_exist(tag):
-                dpg.configure_item(tag, width=int(box_w), height=int(box_h))
+                dpg.configure_item(tag, width=int(status_box_w), height=int(status_box_h))
         
         if dpg.does_item_exist("start_button"):
             for btn in ["start_button", "hold_button", "scrub_button", "reset_button"]:
@@ -170,22 +175,19 @@ class CountdownMain:
                 dpg.set_item_indent("count_group", max(0, int((window_width/2) - (count_size[0]/2) + self.settings["centering_offset"])))
         
         # Center status text items
+        fixed_box_width = 210
         for item in ["weather", "range", "vehicle"]:
             name_tag = f"{item}_name_text"
             status_tag = f"{item}_status_text"
             if dpg.does_item_exist(name_tag):
                 name_size = dpg.get_text_size(dpg.get_value(name_tag), font=fonts.get("status", 0))
                 if name_size:
-                    box_tag = f"{item}_box"
-                    box_width = dpg.get_item_width(box_tag) or 250
-                    indent = max(0, int(((box_width / 2) - (name_size[0] / 2)) * 0.9))
+                    indent = max(0, int(((fixed_box_width / 2) - (name_size[0] / 2)) * 0.99))
                     dpg.set_item_indent(name_tag, indent)
             if dpg.does_item_exist(status_tag):
                 status_size = dpg.get_text_size(dpg.get_value(status_tag), font=fonts.get("status", 0))
                 if status_size:
-                    box_tag = f"{item}_box"
-                    box_width = dpg.get_item_width(box_tag) or 250
-                    indent = max(0, int(((box_width / 2) - (status_size[0] / 2)) * 0.9))
+                    indent = max(0, int(((fixed_box_width / 2) - (status_size[0] / 2)) * 0.99))
                     dpg.set_item_indent(status_tag, indent)
         
         if self.scrubbed:
@@ -231,23 +233,32 @@ def apply_theme():
 def select_display(display_type):
     dw  = DisplayWindow()
     if display_type == "countdown":
-        dw.countdown_display()
+        if dpg.does_item_exist("countdown"):
+            pass
+        else:
+            dw.countdown_display()
     elif display_type == "status":
-        dw.status_display()
+        if dpg.does_item_exist("status_display"):
+            pass
+        else:
+            dw.status_display()
     elif display_type == "concerns":
-        dw.concerns_display()
+        if dpg.does_item_exist("concerns_display"):
+            pass
+        else:
+            dw.concerns_display()
     
     dpg.configure_item("window_select", show=False)
 
 # Display window class
 class DisplayWindow:
     def __init__(self):
-        self.window_width = 800
+        self.window_width = 702
         self.window_x = 415
     
     # Countdown display window
     def countdown_display(self):
-        with dpg.window(label="Countdown Clock", tag="countdown", width=self.window_width, height=150, pos=[self.window_x, 0]):
+        with dpg.window(label="Countdown Clock", tag="countdown", width=self.window_width, height=232, pos=[self.window_x, 0]):
             dpg.add_text(state.settings["mission_name"], tag="mission_title", show=state.settings["show_mission"])
             if "large" in fonts:
                 dpg.bind_item_font("mission_title", fonts["large"])
@@ -263,7 +274,7 @@ class DisplayWindow:
     
     # Status display window
     def status_display(self):
-        with dpg.window(label="Status Display", tag="status_display", width=self.window_width, height=250, pos=[self.window_x, 310]):
+        with dpg.window(label="Status Display", tag="status_display", width=self.window_width, height=148, pos=[self.window_x, 232]):
             with dpg.group(horizontal=True):
                 for item in ["WEATHER", "RANGE", "VEHICLE"]:
 
@@ -271,16 +282,21 @@ class DisplayWindow:
                     name_tag = f"{item.lower()}_name_text"
                     status_tag = f"{item.lower()}_status_text"
                     
-                    with dpg.child_window(tag=box_tag, width=-1, height=-1):
+                    with dpg.child_window(tag=box_tag, width=210, height=-1):
                         dpg.add_text(f"{item}", tag=name_tag)
                         dpg.add_text("NO-GO", tag=status_tag)
                         if "status" in fonts:
                             dpg.bind_item_font(name_tag, fonts["status"])
                             dpg.bind_item_font(status_tag, fonts["status"])
+                    
+                    if item != "VEHICLE":
+                        dpg.add_spacer(width=12)
+                
+                dpg.add_spacer(width=15, tag="status_spacer_right")
     
     # Major concerns display window
     def concerns_display(self):
-        with dpg.window(label="Major Concerns Display", tag="concerns_display", width=self.window_width, height=125, pos=[self.window_x, 570]):
+        with dpg.window(label="Major Concerns Display", tag="concerns_display", width=self.window_width, height=160, pos=[self.window_x, 380]):
             dpg.add_text("MAJOR CONCERNS: ")
             with dpg.child_window(tag="concerns_box", width=-1, height=100):
                 c_txt = dpg.add_text(state.settings["manual_concerns"], tag="concerns_text")
@@ -341,6 +357,17 @@ with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=
    dpg.add_color_edit(label="Box Background Color", default_value=state.settings["box_bg_color"], callback=lambda s, a: (state.settings.update({"box_bg_color": a}), apply_theme()))
    dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], callback=lambda s, a: (state.settings.update({"box_outline": a}), apply_theme()))
    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
+
+# Menubar
+with dpg.viewport_menu_bar():
+    with dpg.menu(label="Displays"):
+        dpg.add_menu_item(label="Countdown Clock", callback=lambda: select_display("countdown"))
+        dpg.add_menu_item(label="Status Display", callback=lambda: select_display("status"))
+        dpg.add_menu_item(label="Major Concerns Display", callback=lambda: select_display("concerns"))
+        dpg.add_menu_item(label="Controls", callback=lambda: state.toggle_window("Controls"))
+    with dpg.menu(label="Help"):
+        dpg.add_menu_item(label="Guide")
+
 
 # DPG wrap up
 dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720)
