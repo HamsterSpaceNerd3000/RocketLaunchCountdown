@@ -266,10 +266,10 @@ box_theme = None
 def apply_theme():
     global box_theme
 
-    bg = [int(c * 255) for c in state.settings["box_bg_color"]]
-    border = [int(c * 255) for c in state.settings["box_outline"]]
+    bg = [int(max(0, min(255, c * 255))) for c in state.settings["box_bg_color"]]
+    border = [int(max(0, min(255, c * 255))) for c in state.settings["box_outline"]]
     border_width = state.settings["box_border_width"]
-
+    
     # Delete old theme if it exists
     if box_theme and dpg.does_item_exist(box_theme):
         dpg.delete_item(box_theme)
@@ -280,15 +280,7 @@ def apply_theme():
             dpg.add_theme_color(dpg.mvThemeCol_Border, border)
             dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, border_width)
 
-    # Bind to ALL possible boxes
-    for tag in [
-        "weather_box",
-        "range_box",
-        "vehicle_box",
-        "concerns_box"
-    ]:
-        if dpg.does_item_exist(tag):
-            dpg.bind_item_theme(tag, box_theme)
+    dpg.bind_theme(box_theme)
 
 
 def select_display(display_type):
@@ -347,6 +339,7 @@ class DisplayWindow:
                 if "huge" in fonts:
                     dpg.bind_item_font("prefix_text", fonts["huge"])
                     dpg.bind_item_font("countdown_text", fonts["huge"])
+        apply_theme()
     
     # Status display window
     def status_display(self):
@@ -369,7 +362,8 @@ class DisplayWindow:
                         dpg.add_spacer(width=12)
                 
                 dpg.add_spacer(width=15, tag="status_spacer_right")
-    
+        apply_theme()
+
     # Major concerns display window
     def concerns_display(self):
         with dpg.window(label="Major Concerns Display", tag="concerns_display", width=self.window_width, height=160, pos=[self.window_x, 380]):
@@ -378,6 +372,7 @@ class DisplayWindow:
                 c_txt = dpg.add_text(state.settings["manual_concerns"], tag="concerns_text")
                 if "status" in fonts:
                     dpg.bind_item_font(c_txt, fonts["status"])
+        apply_theme()
 
 # Control window
 with dpg.window(label="Controls", tag="Controls", width=415, height=525, pos=[0, 0]):
@@ -442,7 +437,7 @@ with dpg.popup(parent="add_display_button", mousebutton=dpg.mvMouseButton_Left, 
 with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=[0, 525], show=False):
    dpg.add_checkbox(label="TOUCH SCREEN", default_value=state.settings["touch_screen"], callback=lambda s, a: state.settings.update({"touch_screen": a}))
    dpg.add_slider_int(label="Nudge", default_value=state.settings["centering_offset"], min_value=-100, max_value=100, callback=lambda s, a: state.settings.update({"centering_offset": a}))
-   dpg.add_color_edit(label="Box Background Color", default_value=state.settings["box_bg_color"], callback=lambda s, a: (state.settings.update({"box_bg_color": a}), apply_theme()))
+   dpg.add_color_edit(label="Box Background Color", default_value=state.settings["box_bg_color"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"box_bg_color": a[:3]}), apply_theme()))
    dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], callback=lambda s, a: (state.settings.update({"box_outline": a}), apply_theme()))
    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
 
