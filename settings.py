@@ -18,7 +18,10 @@ defaults = {
     "min_hold_reset": "00:00:40",
     "manual_concerns": "NO CONCERNS",
     "touch_screen": False,
-    "centering_offset": 0
+    "centering_offset": 0,
+    "countdown_text_color": [1.0, 1.0, 1.0, 1.0],
+    "status_text_color": [1.0, 1.0, 1.0, 1.0],
+    "mission_text_color": [1.0, 1.0, 1.0, 1.0]
 }
 
 def load():

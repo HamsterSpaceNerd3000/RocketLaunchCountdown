@@ -5,6 +5,8 @@ import dearpygui.dearpygui as dpg
 import settings
 from datetime import datetime, timedelta
 import countdown_handler as ch
+import subprocess
+import json
 
 # DPG init
 dpg.create_context()
@@ -207,6 +209,45 @@ class CountdownMain:
     def format_time(self, seconds):
         ts = int(seconds)
         return f"{ts//3600:02}:{(ts%3600)//60:02}:{ts%60:02}"
+    
+    # Function to export the control state to popout instances
+    def export_state(self):
+        if self.scrubbed:
+            color = (255, 0, 0)
+        else:
+            color = (255, 255, 255)
+
+        status_labels = ["NO-GO", "GO", "N/A"]
+        status_colors = [(255, 0, 0), (0, 255, 0), (128, 128, 128)]
+
+        status_data = {}
+
+        for key, idx in self.statuses.items():
+            status_data[key] = {
+                "label": status_labels[idx],
+                "color": status_colors[idx]
+            }
+
+        data = {
+            "mission_name": self.settings["mission_name"],
+            "show_mission": self.settings["show_mission"],
+            "prefix": dpg.get_value("prefix_text") if dpg.does_item_exist("prefix_text") else "",
+            "countdown_text": dpg.get_value("countdown_text") if dpg.does_item_exist("countdown_text") else "00:00:00",
+            "centering_offset": self.settings["centering_offset"],
+            "scrubbed": self.scrubbed,
+            "hold": self.hold,
+            "countdown_color": color,
+            "statuses": status_data,
+            "manual_concerns": self.settings["manual_concerns"],
+
+            "box_bg_color": self.settings["box_bg_color"],
+            "box_outline": self.settings["box_outline"],
+            "box_border_width": self.settings["box_border_width"]
+
+        }
+
+        with open("countdown_state.json", "w") as f:
+            json.dump(data, f)
 
 state = CountdownMain()
 
@@ -219,16 +260,36 @@ with dpg.font_registry():
     except:
         pass
 
+box_theme = None
+
 # Function to apply theme before creating windows
 def apply_theme():
-    bg, border = [c * 255 for c in state.settings["box_bg_color"]], [c * 255 for c in state.settings["box_outline"]]
-    with dpg.theme() as t:
+    global box_theme
+
+    bg = [int(c * 255) for c in state.settings["box_bg_color"]]
+    border = [int(c * 255) for c in state.settings["box_outline"]]
+    border_width = state.settings["box_border_width"]
+
+    # Delete old theme if it exists
+    if box_theme and dpg.does_item_exist(box_theme):
+        dpg.delete_item(box_theme)
+
+    with dpg.theme() as box_theme:
         with dpg.theme_component(dpg.mvChildWindow):
-            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, bg); dpg.add_theme_color(dpg.mvThemeCol_Border, border)
-            dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, state.settings["box_border_width"])
-    for tag in ["weather_box", "range_box", "vehicle_box", "concerns_box"]:
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, bg)
+            dpg.add_theme_color(dpg.mvThemeCol_Border, border)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, border_width)
+
+    # Bind to ALL possible boxes
+    for tag in [
+        "weather_box",
+        "range_box",
+        "vehicle_box",
+        "concerns_box"
+    ]:
         if dpg.does_item_exist(tag):
-            dpg.bind_item_theme(tag, t)
+            dpg.bind_item_theme(tag, box_theme)
+
 
 def select_display(display_type):
     dw  = DisplayWindow()
@@ -248,6 +309,21 @@ def select_display(display_type):
         else:
             dw.concerns_display()
     
+    dpg.configure_item("window_select", show=False)
+
+# Function to open the countdown popout
+def countdown_popout():
+    subprocess.Popen(["python", "popouts/countdown.py"])
+    dpg.configure_item("window_select", show=False)
+
+# Function to open the status popout
+def status_popout():
+    subprocess.Popen(["python", "popouts/status.py"])
+    dpg.configure_item("window_select", show=False)
+
+# Function to open the concerns popout
+def concerns_popout():
+    subprocess.Popen(["python", "popouts/concerns.py"])
     dpg.configure_item("window_select", show=False)
 
 # Display window class
@@ -346,9 +422,21 @@ with dpg.window(label="Controls", tag="Controls", width=415, height=525, pos=[0,
 with dpg.popup(parent="add_display_button", mousebutton=dpg.mvMouseButton_Left, tag="window_select"):
     dpg.add_text("Select Display Type:")
     dpg.add_separator()
-    dpg.add_button(label="COUNTDOWN CLOCK", callback=lambda: select_display("countdown"))
-    dpg.add_button(label="STATUS DISPLAY", callback=lambda: select_display("status"))
-    dpg.add_button(label="CONCERNS DISPLAY", callback=lambda: select_display("concerns"))
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="COUNTDOWN CLOCK", callback=lambda: select_display("countdown"))
+        dpg.add_button(arrow=True, direction=dpg.mvDir_Right, tag="countdown_pop_btn", callback=lambda: countdown_popout())
+        with dpg.tooltip("countdown_pop_btn"):
+            dpg.add_text("Countdown Popout")
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="STATUS DISPLAY", callback=lambda: select_display("status"))
+        dpg.add_button(arrow=True, direction=dpg.mvDir_Right, tag="status_pop_btn", callback=lambda: status_popout())
+        with dpg.tooltip("status_pop_btn"):
+            dpg.add_text("Status Popout")
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="CONCERNS DISPLAY", callback=lambda: select_display("concerns"))
+        dpg.add_button(arrow=True, direction=dpg.mvDir_Right, tag="concerns_pop_btn", callback=lambda: concerns_popout())
+        with dpg.tooltip("concerns_pop_btn"):
+            dpg.add_text("Concerns Popout")
 
 # Settings window
 with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=[0, 525], show=False):
@@ -367,6 +455,10 @@ with dpg.viewport_menu_bar():
         dpg.add_menu_item(label="Controls", callback=lambda: state.toggle_window("Controls"))
     with dpg.menu(label="Help"):
         dpg.add_menu_item(label="Guide")
+    with dpg.menu(label="Popouts"):
+        dpg.add_menu_item(label="Countdown", callback=lambda: countdown_popout())
+        dpg.add_menu_item(label="Status Popout", callback=lambda: status_popout())
+        dpg.add_menu_item(label="Concerns Popout", callback=lambda: concerns_popout())
 
 
 # DPG wrap up
@@ -378,5 +470,6 @@ for key in state.statuses:
     state.update_status_gui(key, state.statuses[key])
 while dpg.is_dearpygui_running():
     state.update()
+    state.export_state()
     dpg.render_dearpygui_frame()
 dpg.destroy_context()
