@@ -6,12 +6,18 @@ import settings
 from datetime import datetime, timedelta
 import countdown_handler as ch
 import subprocess
+import time
 import json
+import spreadsheet_handler as sh
+import threading
+import re
 
 # DPG init
 dpg.create_context()
 
 version = "0.8.0"
+
+error_theme = None
 
 # Countdown class
 class CountdownMain:
@@ -31,6 +37,9 @@ class CountdownMain:
         self.load_settings()
 
         self.target_set = dpg.get_value("target_in")
+
+        self.last_sync_time = 0
+        self.sync_interval = 3  # Seconds between sheet updates
     
     # Function to load settings and update approapriate values
     def load_settings(self):
@@ -118,19 +127,20 @@ class CountdownMain:
         self.statuses[key] = (self.statuses[key] + 1) % 3
         self.update_status_gui(key, self.statuses[key]) 
     
-    # Function to update the go-nogo statuses
     def update_status_gui(self, key, idx):
-        labels = ["NO-GO", "GO", "N/A"]
-        colors = [(255, 0, 0), (0, 255, 0), (128, 128, 128)]
-
         tag = f"{key.lower()}_status_text"
-
         if not dpg.does_item_exist(tag):
             return
+        
+        current_val = str(dpg.get_value(tag))
+        if "%" in current_val:
+            return 
 
+        labels = ["NO-GO", "GO", "N/A"]
+        colors = [(255, 0, 0), (0, 255, 0), (128, 128, 128)]
+        
         dpg.set_value(tag, labels[idx])
         dpg.configure_item(tag, color=colors[idx])
-
     
     def start_countdown(self):
         self.target_set = dpg.get_value("target_in")
@@ -248,7 +258,70 @@ class CountdownMain:
 
         with open("countdown_state.json", "w") as f:
             json.dump(data, f)
+    
+    # Refresh data from spreadsheet
+    def spreadsheet_refresh(self):
+        def background_task():
+            data = sh.load_sheet_data()
+            
+            if "error" in data:
+                log_to_console(data["error"])
+                return
 
+            # Robust mapping dictionary
+            mapping = {"NO-GO": 0, "GO": 1, "N/A": 2}
+            
+            for key in ["WEATHER", "RANGE", "VEHICLE"]:
+                raw_val = str(data.get(key.lower(), "N/A")).strip().upper()
+                
+                if key == "WEATHER" and "%" in raw_val:
+                    try:
+                        # Convert "85%" -> 85
+                        percent = int(raw_val.replace("%", ""))
+                        
+                        # Determine Color and Status based on thresholds
+                        if percent >= 60:
+                            status_color = (0, 255, 0)   # Green
+                            self.statuses[key] = 1       # GO
+                        elif 45 <= percent < 60:
+                            status_color = (255, 165, 0) # Orange
+                            self.statuses[key] = 1       # Still GO (logic-wise), but orange visual
+                        else:
+                            status_color = (255, 0, 0)   # Red
+                            self.statuses[key] = 0       # NO-GO
+
+                        # Update GUI
+                        if dpg.does_item_exist("weather_status_text"):
+                            dpg.set_value("weather_status_text", raw_val)
+                            dpg.configure_item("weather_status_text", color=status_color)
+                    except ValueError:
+                        # Fallback if the percentage isn't a valid number
+                        self.update_status_gui(key, 2) 
+                else:
+                    # Standard GO/NO-GO mapping for Range and Vehicle
+                    idx = mapping.get(raw_val, 2)
+                    self.statuses[key] = idx
+                    self.update_status_gui(key, idx)
+
+            # Update Concerns
+            concerns = data.get("concerns", "No Data")
+            self.settings["manual_concerns"] = concerns
+            if dpg.does_item_exist("concerns_text"):
+                dpg.set_value("concerns_text", concerns)
+            
+            log_to_console(f"Sync: W:{data.get('weather')} R:{data.get('range')} V:{data.get('vehicle')}")
+
+        threading.Thread(target=background_task, daemon=True).start()
+
+    def handle_link_paste(self, new_url):
+        self.settings["spreadsheet_link"] = new_url
+
+        match = re.search(r"gid=(\d+)", new_url)
+        if match:
+            extracted_gid = match.group(1)
+            self.settings["sheet_gid"] = extracted_gid
+            if dpg.does_item_exist("gid_input"):
+                dpg.set_value("gid_input", extracted_gid)
 state = CountdownMain()
 
 # Font handling
@@ -264,7 +337,7 @@ box_theme = None
 
 # Function to apply theme before creating windows
 def apply_theme():
-    global box_theme
+    global box_theme, error_theme
 
     bg = [int(max(0, min(255, c * 255))) for c in state.settings["box_bg_color"]]
     border = [int(max(0, min(255, c * 255))) for c in state.settings["box_outline"]]
@@ -279,6 +352,11 @@ def apply_theme():
             dpg.add_theme_color(dpg.mvThemeCol_ChildBg, bg)
             dpg.add_theme_color(dpg.mvThemeCol_Border, border)
             dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, border_width)
+
+    with dpg.theme() as error_theme:
+        with dpg.theme_component(dpg.mvAll):
+            dpg.add_theme_color(dpg.mvThemeCol_Border, (255, 0, 0), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 2, category=dpg.mvThemeCat_Core)
 
     dpg.bind_theme(box_theme)
 
@@ -363,6 +441,9 @@ class DisplayWindow:
                 
                 dpg.add_spacer(width=15, tag="status_spacer_right")
         apply_theme()
+        for key in ["WEATHER", "RANGE", "VEHICLE"]:
+            current_idx = state.statuses.get(key, 2) # Default to 2 (N/A) if not found
+            state.update_status_gui(key, current_idx)
 
     # Major concerns display window
     def concerns_display(self):
@@ -433,13 +514,49 @@ with dpg.popup(parent="add_display_button", mousebutton=dpg.mvMouseButton_Left, 
         with dpg.tooltip("concerns_pop_btn"):
             dpg.add_text("Concerns Popout")
 
+# Spreadsheet window
+with dpg.window(label="Spreadsheet Manager", tag="spreadsheet", width=420, height=300, pos=[415, 380], show=False):
+    dpg.add_text("Spreadsheet Link")
+    dpg.add_input_text(default_value=state.settings["spreadsheet_link"], width=-1, callback=lambda s, a: (state.settings.update({"spreadsheet_link": a})))
+    dpg.add_text("Weather Cell")
+    dpg.add_input_text(default_value=state.settings["weather_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"weather_sheet_cell": a})))
+    dpg.add_text("Range Cell")
+    dpg.add_input_text(default_value=state.settings["range_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"range_sheet_cell": a})))
+    dpg.add_text("Vehicle Cell")
+    dpg.add_input_text(default_value=state.settings["vehicle_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"vehicle_sheet_cell": a})))
+    dpg.add_text("Concerns Cell")
+    dpg.add_input_text(default_value=state.settings["concerns_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"concerns_sheet_cell": a})))
+    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
+
+
 # Settings window
-with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=[0, 525], show=False):
+with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=[415, 80], show=False):
    dpg.add_checkbox(label="TOUCH SCREEN", default_value=state.settings["touch_screen"], callback=lambda s, a: state.settings.update({"touch_screen": a}))
    dpg.add_slider_int(label="Nudge", default_value=state.settings["centering_offset"], min_value=-100, max_value=100, callback=lambda s, a: state.settings.update({"centering_offset": a}))
    dpg.add_color_edit(label="Box Background Color", default_value=state.settings["box_bg_color"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"box_bg_color": a[:3]}), apply_theme()))
    dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], callback=lambda s, a: (state.settings.update({"box_outline": a}), apply_theme()))
+   dpg.add_button(label="SPREADSHEET", width=-1, height=30, callback=lambda: state.toggle_window("spreadsheet"))
    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
+
+console_logs = []
+
+# Console logging function
+def log_to_console(error):
+    console_logs.append(error)
+    if len(console_logs) > 50:
+        console_logs.pop(0)
+
+    if dpg.does_item_exist("console_widget"):
+        current_log_string = "\n".join(console_logs)
+        dpg.set_value("console_widget", current_log_string)
+
+        dpg.set_y_scroll("console_scroll", dpg.get_y_scroll_max("console_scroll"))
+
+
+# Error console
+with dpg.window(label="System Console", tag="console_window", width=390, height=200, pos=[830, 0], show=False):
+    with dpg.child_window(tag="console_scroll", autosize_x=True, border=True):
+        dpg.add_text("", tag="console_widget")
 
 # Menubar
 with dpg.viewport_menu_bar():
@@ -450,20 +567,33 @@ with dpg.viewport_menu_bar():
         dpg.add_menu_item(label="Controls", callback=lambda: state.toggle_window("Controls"))
     with dpg.menu(label="Help"):
         dpg.add_menu_item(label="Guide")
+        dpg.add_menu_item(label="Console", callback=lambda: state.toggle_window("console_window"))
     with dpg.menu(label="Popouts"):
         dpg.add_menu_item(label="Countdown", callback=lambda: countdown_popout())
         dpg.add_menu_item(label="Status Popout", callback=lambda: status_popout())
         dpg.add_menu_item(label="Concerns Popout", callback=lambda: concerns_popout())
-
+    with dpg.menu(label="Settings"):
+        dpg.add_menu_item(label="Main Settings", callback=lambda: state.toggle_window("SettingsWin"))
+        dpg.add_menu_item(label="Spreadsheet Settings", callback=lambda: state.toggle_window("spreadsheet"))
 
 # DPG wrap up
 dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720)
 dpg.setup_dearpygui()
 dpg.show_viewport()
 apply_theme()
+state.update()
 for key in state.statuses:
     state.update_status_gui(key, state.statuses[key])
 while dpg.is_dearpygui_running():
+    # 1. Only sync if enough time has passed
+    current_time = time.time()
+    if current_time - state.last_sync_time > state.sync_interval:
+        # Check if we actually have a link before trying to sync
+        if state.settings.get("spreadsheet_link"):
+            state.spreadsheet_refresh() 
+            state.last_sync_time = current_time
+
+    # 2. These stay here because they handle the clock and GUI frames
     state.update()
     state.export_state()
     dpg.render_dearpygui_frame()

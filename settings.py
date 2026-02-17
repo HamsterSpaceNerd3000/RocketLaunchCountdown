@@ -21,7 +21,13 @@ defaults = {
     "centering_offset": 0,
     "countdown_text_color": [1.0, 1.0, 1.0, 255],
     "status_text_color": [1.0, 1.0, 1.0, 255],
-    "mission_text_color": [1.0, 1.0, 1.0, 255]
+    "mission_text_color": [1.0, 1.0, 1.0, 255],
+    "spreadsheet_link": "",
+    "weather_sheet_cell": "",
+    "range_sheet_cell": "",
+    "vehicle_sheet_cell": "",
+    "concerns_sheet_cell": "",
+    "sheet_gid": ""
 }
 
 def load():
