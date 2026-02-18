@@ -13,6 +13,7 @@ defaults = {
     "prefix": "T-",
     "box_bg_color": [0.0, 0.0, 0.0, 255],
     "box_outline": [0.5, 0.5, 0.5, 255],
+    "txt_color": [255, 255, 255, 255],
     "box_border_width": 2,
     "auto_hold_time": "00:02:00",
     "min_hold_reset": "00:00:40",
@@ -37,6 +38,6 @@ def load():
                 defaults.update(json.load(f))
         except: pass
 
-def save():
+def save(data_to_save):
     with open(config_file, "w") as f:
-        json.dump(defaults, f)
+        json.dump(data_to_save, f, indent=4)

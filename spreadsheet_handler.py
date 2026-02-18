@@ -13,6 +13,8 @@ def load_sheet_data():
     # Load latest settings
     defaults = settings.defaults
 
+    sheet_url = None
+
     # Default return structure
     results = {
         "weather": "N/A",
@@ -22,7 +24,10 @@ def load_sheet_data():
     }
 
     # Extract sheet
-    sheet_url = defaults.get("spreadsheet_link", "").strip()
+    try:
+        sheet_url = defaults.get("spreadsheet_link", "").strip()
+    except:
+        pass
 
     # Sheet GID
     user_gid = str(defaults.get("sheet_gid", "0")).strip()

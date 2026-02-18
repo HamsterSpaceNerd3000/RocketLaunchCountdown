@@ -1,1 +1,50 @@
-{"mission_name": "PLACEHOLDER", "show_mission": true, "prefix": "T-", "box_bg_color": [0.06925222277641296, 0.11880119889974594, 0.6421568393707275], "box_outline": [0.9058823585510254, 0.04313725605607033, 0.04313725605607033, 1.0], "box_border_width": 5, "auto_hold_time": "00:02:00", "min_hold_reset": "00:00:40", "manual_concerns": "No Data", "touch_screen": false, "centering_offset": 0, "countdown_text_color": [1.0, 1.0, 1.0, 0.003921568859368563], "status_text_color": [1.0, 1.0, 1.0, 1.0], "mission_text_color": [1.0, 1.0, 1.0, 1.0], "spreadsheet_link": "https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/edit?gid=855477916#gid=855477916https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/edit?gid=855477916#gid=855477916", "weather_sheet_cell": "N2", "range_sheet_cell": "L2", "vehicle_sheet_cell": "P2", "concerns_sheet_cell": ""}
+{
+    "mission_name": "PLACEHOLDER",
+    "show_mission": true,
+    "prefix": "T-",
+    "box_bg_color": [
+        0.06925222277641296,
+        0.11880119889974594,
+        0.6421568393707275
+    ],
+    "box_outline": [
+        0.0,
+        0.36269426345825195,
+        1.0
+    ],
+    "txt_color": [
+        1.0,
+        1.0,
+        1.0
+    ],
+    "box_border_width": 5,
+    "auto_hold_time": "00:02:00",
+    "min_hold_reset": "00:00:40",
+    "manual_concerns": "Testing, It Works?",
+    "touch_screen": false,
+    "centering_offset": 0,
+    "countdown_text_color": [
+        1.0,
+        1.0,
+        1.0,
+        0.003921568859368563
+    ],
+    "status_text_color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "mission_text_color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ],
+    "spreadsheet_link": "https://docs.google.com/spreadsheets/d/1UPJTW8vH2mgEzispjg_Y_zSqYTFaLoxuoZnqleVlSZ0/edit?gid=855477916#gid=855477916",
+    "weather_sheet_cell": "N2",
+    "range_sheet_cell": "L2",
+    "vehicle_sheet_cell": "P2",
+    "concerns_sheet_cell": "K4:P4",
+    "sheet_gid": "855477916"
+}

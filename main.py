@@ -313,23 +313,57 @@ class CountdownMain:
 
         threading.Thread(target=background_task, daemon=True).start()
 
-    def handle_link_paste(self, new_url):
+    def handle_link_paste(self, app_data):
+        # 'app_data' is what the user actually typed/pasted into the box
+        new_url = app_data
+        
+        # Correct way to update the dictionary
         self.settings["spreadsheet_link"] = new_url
 
-        match = re.search(r"gid=(\d+)", new_url)
-        if match:
-            extracted_gid = match.group(1)
-            self.settings["sheet_gid"] = extracted_gid
-            if dpg.does_item_exist("gid_input"):
-                dpg.set_value("gid_input", extracted_gid)
+        # Look for the GID
+        try:
+            match = re.search(r"gid=(\d+)", new_url)
+            if match:
+                extracted_gid = match.group(1)
+                self.settings["sheet_gid"] = extracted_gid
+                if dpg.does_item_exist("gid_input"):
+                    dpg.set_value("gid_input", extracted_gid)
+        except Exception as e:
+            log_to_console(f"Regex Error: {e}")
+
+    def reset_settings(self):
+        self.settings = settings.defaults.copy()
+
+        settings.save(self.settings)
+
+        if dpg.does_item_exist("mission_title"):
+            dpg.set_value("mission_title", self.settings["mission_name"])
+        
+        dpg.set_value("target_in", "")
+        if dpg.does_item_exist("sheet_name_input"):
+            dpg.set_value("sheet_name_input", "")
+        if dpg.does_item_exist("gid_input"):
+            dpg.set_value("gid_input", "")
+        
+        apply_theme()
+
+        log_to_console("Settings reset to defaults")
 state = CountdownMain()
 
+# Font handling
 # Font handling
 fonts = {}
 with dpg.font_registry():
     try:
         font_p = "C:/Windows/Fonts/consola.ttf"
-        fonts["huge"], fonts["large"], fonts["status"] = dpg.add_font(font_p, 120), dpg.add_font(font_p, 60), dpg.add_font(font_p, 40)
+        # Create your sizes
+        fonts["huge"] = dpg.add_font(font_p, 120)
+        fonts["large"] = dpg.add_font(font_p, 60)
+        fonts["status"] = dpg.add_font(font_p, 40)
+        fonts["default"] = dpg.add_font(font_p, 12) # Add a standard size
+        
+        # This one line makes EVERYTHING use this font by default
+        dpg.bind_font(fonts["default"]) 
     except:
         pass
 
@@ -341,6 +375,7 @@ def apply_theme():
 
     bg = [int(max(0, min(255, c * 255))) for c in state.settings["box_bg_color"]]
     border = [int(max(0, min(255, c * 255))) for c in state.settings["box_outline"]]
+    txt_color = [int(max(0, min(255, c * 255))) for c in state.settings["txt_color"]]
     border_width = state.settings["box_border_width"]
     
     # Delete old theme if it exists
@@ -348,10 +383,12 @@ def apply_theme():
         dpg.delete_item(box_theme)
 
     with dpg.theme() as box_theme:
-        with dpg.theme_component(dpg.mvChildWindow):
+        with dpg.theme_component(dpg.mvAll):
             dpg.add_theme_color(dpg.mvThemeCol_ChildBg, bg)
             dpg.add_theme_color(dpg.mvThemeCol_Border, border)
             dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, border_width)
+            dpg.add_theme_color(dpg.mvThemeCol_Text, txt_color)
+
 
     with dpg.theme() as error_theme:
         with dpg.theme_component(dpg.mvAll):
@@ -514,10 +551,13 @@ with dpg.popup(parent="add_display_button", mousebutton=dpg.mvMouseButton_Left, 
         with dpg.tooltip("concerns_pop_btn"):
             dpg.add_text("Concerns Popout")
 
+
 # Spreadsheet window
 with dpg.window(label="Spreadsheet Manager", tag="spreadsheet", width=420, height=300, pos=[415, 380], show=False):
     dpg.add_text("Spreadsheet Link")
-    dpg.add_input_text(default_value=state.settings["spreadsheet_link"], width=-1, callback=lambda s, a: (state.settings.update({"spreadsheet_link": a})))
+    dpg.add_input_text(default_value=state.settings["spreadsheet_link"], width=-1, callback=lambda s, a: state.handle_link_paste(a))
+    dpg.add_text("Spreadsheet GID (At the end of the link)")
+    dpg.add_input_text(tag="gid_input", default_value=state.settings["sheet_gid"], width=-1, callback=lambda s, a: state.settings.update({"sheet_gid": a}))
     dpg.add_text("Weather Cell")
     dpg.add_input_text(default_value=state.settings["weather_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"weather_sheet_cell": a})))
     dpg.add_text("Range Cell")
@@ -526,17 +566,18 @@ with dpg.window(label="Spreadsheet Manager", tag="spreadsheet", width=420, heigh
     dpg.add_input_text(default_value=state.settings["vehicle_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"vehicle_sheet_cell": a})))
     dpg.add_text("Concerns Cell")
     dpg.add_input_text(default_value=state.settings["concerns_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"concerns_sheet_cell": a})))
-    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
+    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save(state.settings))
 
 
 # Settings window
 with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=[415, 80], show=False):
    dpg.add_checkbox(label="TOUCH SCREEN", default_value=state.settings["touch_screen"], callback=lambda s, a: state.settings.update({"touch_screen": a}))
-   dpg.add_slider_int(label="Nudge", default_value=state.settings["centering_offset"], min_value=-100, max_value=100, callback=lambda s, a: state.settings.update({"centering_offset": a}))
    dpg.add_color_edit(label="Box Background Color", default_value=state.settings["box_bg_color"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"box_bg_color": a[:3]}), apply_theme()))
-   dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], callback=lambda s, a: (state.settings.update({"box_outline": a}), apply_theme()))
+   dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"box_outline": a[:3]}), apply_theme()))
+   dpg.add_color_edit(label="Text Color", default_value=state.settings["txt_color"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"txt_color": a[:3]}), apply_theme()))
    dpg.add_button(label="SPREADSHEET", width=-1, height=30, callback=lambda: state.toggle_window("spreadsheet"))
-   dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save)
+   dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save(state.settings))
+   dpg.add_button(label="RESET TO DEFAULTS", width=-1, height=30, callback=state.reset_settings)
 
 console_logs = []
 
