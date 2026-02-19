@@ -420,17 +420,17 @@ def select_display(display_type):
 
 # Function to open the countdown popout
 def countdown_popout():
-    subprocess.Popen(["python", "popouts/countdown.py"])
+    subprocess.Popen(["python", "countdown.py"])
     dpg.configure_item("window_select", show=False)
 
 # Function to open the status popout
 def status_popout():
-    subprocess.Popen(["python", "popouts/status.py"])
+    subprocess.Popen(["python", "status.py"])
     dpg.configure_item("window_select", show=False)
 
 # Function to open the concerns popout
 def concerns_popout():
-    subprocess.Popen(["python", "popouts/concerns.py"])
+    subprocess.Popen(["python", "concerns.py"])
     dpg.configure_item("window_select", show=False)
 
 # Display window class
