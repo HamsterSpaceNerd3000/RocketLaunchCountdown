@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['main.py', 'errors.py', 'status.py', 'spreadsheet_handler.py', 'settings.py', 'countdown.py', 'countdown_handler.py', 'concerns.py'],
+    ['main.py', 'settings.py', 'spreadsheet_handler.py', 'errors.py', 'countdown_handler.py'],
     pathex=[],
     binaries=[],
     datas=[],

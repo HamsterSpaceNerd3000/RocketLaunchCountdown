@@ -10,6 +10,9 @@ import errors
 
 
 def load_sheet_data():
+    """
+    Function to load latest sheet data, recieves all needed info from settings json.
+    """
     # Load latest settings
     defaults = settings.defaults
 

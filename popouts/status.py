@@ -43,6 +43,31 @@ with dpg.window(label="GO / NO-GO", tag="gonogo_window", no_collapse=True):
         dpg.add_spacer(width=15, tag="status_spacer_right")
 
 # ---------- Sync ----------
+def apply_popout_theme(data):
+    """Applies theme using colors directly from the state data."""
+    try:
+        # Pull colors from the state dictionary
+        # Assuming main.py saves them as 0-255 or 0.0-1.0
+        # If they are already 0-255 in the state file, remove the * 255
+        bg = data.get("box_bg_color", [15, 15, 15])
+        border = data.get("box_outline", [255, 255, 255])
+        txt_color = data.get("txt_color", [255, 255, 255])
+        border_width = data.get("box_border_width", 1)
+
+        with dpg.theme() as global_theme:
+            with dpg.theme_component(dpg.mvChildWindow):
+                dpg.add_theme_color(dpg.mvThemeCol_ChildBg, bg)
+                dpg.add_theme_color(dpg.mvThemeCol_Border, border)
+                dpg.add_theme_style(dpg.mvStyleVar_ChildBorderSize, border_width)
+                dpg.add_theme_color(dpg.mvThemeCol_Text, txt_color)
+            
+            with dpg.theme_component(dpg.mvAll):
+                dpg.add_theme_color(dpg.mvThemeCol_Text, txt_color)
+
+        dpg.bind_theme(global_theme)
+    except Exception as e:
+        pass
+
 def update_from_file():
     if not os.path.exists(STATE_FILE):
         return
@@ -51,16 +76,16 @@ def update_from_file():
         with open(STATE_FILE, "r") as f:
             data = json.load(f)
 
-        if "statuses" not in data:
-            return
+        # 1. Update the Theme first
+        apply_popout_theme(data)
 
-        for key, info in data["statuses"].items():
-            status_tag = f"{key}_status"
-
-            if dpg.does_item_exist(status_tag):
-                dpg.set_value(status_tag, info["label"])
-                dpg.configure_item(status_tag, color=tuple(info["color"]))
-
+        # 2. Update the Status Labels and Colors
+        if "statuses" in data:
+            for key, info in data["statuses"].items():
+                status_tag = f"{key}_status"
+                if dpg.does_item_exist(status_tag):
+                    dpg.set_value(status_tag, info["label"])
+                    dpg.configure_item(status_tag, color=tuple(info["color"]))
     except:
         pass
 

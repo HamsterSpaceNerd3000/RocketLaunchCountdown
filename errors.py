@@ -5,6 +5,9 @@ from datetime import datetime
 
 # Error function
 def get_error(code):
+    """
+    Error function, is givin error code, generates proper message for response.
+    """
     time = datetime.now().strftime("%H:%M:%S")
     errors = {
         100: "Sheetlink not found",

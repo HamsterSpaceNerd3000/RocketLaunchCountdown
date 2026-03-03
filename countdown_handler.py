@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 # Function to start the countdown
 def start_countdown(countdown: "CountdownMain"):
+    """
+    Function that starts the countdown clock, uses type checking to grab GUI info to control all the count information.
+    """
     if countdown.scrubbed:
         return
     
@@ -28,6 +31,9 @@ def start_countdown(countdown: "CountdownMain"):
 
 # Function to run the countdown
 def run_countdown(countdown: "CountdownMain"):
+    """
+    Function that handles the actual running of the countdown.
+    """
     diff_sec = (countdown.target_time - datetime.now()).total_seconds()
     if countdown.auto_hold and 0 < diff_sec <= countdown.auto_hold_thres:
         countdown.auto_hold = False; countdown.toggle_hold()

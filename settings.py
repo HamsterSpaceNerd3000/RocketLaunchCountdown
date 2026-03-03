@@ -32,6 +32,9 @@ defaults = {
 }
 
 def load():
+    """
+    Function to load settings from config file, if the config file is renamed, this will break.
+    """
     if os.path.exists(config_file):
         try:
             with open(config_file, "r") as f:
@@ -39,5 +42,10 @@ def load():
         except: pass
 
 def save(data_to_save):
+    """
+    Function to save changed settings to config file.
+
+    data_to_save: The changed settings you want saved, this can be a single setting or the whole batch.
+    """
     with open(config_file, "w") as f:
         json.dump(data_to_save, f, indent=4)

@@ -85,10 +85,15 @@ class CountdownMain:
         self.scrubbed = False
         self.hold_start_time = None
 
-        dpg.set_value("prefix_text", self.settings["prefix"])
-        dpg.set_value("countdown_text", "00:00:00")
-        dpg.configure_item("countdown_text", color=(255, 255, 255))
-    
+        if dpg.does_item_exist("prefix_text"):
+            dpg.set_value("prefix_text", self.settings["prefix"])
+        if dpg.does_item_exist("countdown_text"):
+            dpg.set_value("countdown_text", "00:00:00")
+            dpg.configure_item("countdown_text", color=(255, 255, 255))
+        if dpg.does_item_exist("target_in"):
+            dpg.set_value("target_in", "")
+        
+        log_to_console("System Reset.")
     # Function to toggle a hold
     def toggle_hold(self):
         if not self.running or self.scrubbed:
@@ -351,7 +356,6 @@ class CountdownMain:
 state = CountdownMain()
 
 # Font handling
-# Font handling
 fonts = {}
 with dpg.font_registry():
     try:
@@ -420,17 +424,17 @@ def select_display(display_type):
 
 # Function to open the countdown popout
 def countdown_popout():
-    subprocess.Popen(["python", "countdown.py"])
+    subprocess.Popen(["python", "popouts/countdown.py"])
     dpg.configure_item("window_select", show=False)
 
 # Function to open the status popout
 def status_popout():
-    subprocess.Popen(["python", "status.py"])
+    subprocess.Popen(["python", "popouts/status.py"])
     dpg.configure_item("window_select", show=False)
 
 # Function to open the concerns popout
 def concerns_popout():
-    subprocess.Popen(["python", "concerns.py"])
+    subprocess.Popen(["python", "popouts/concerns.py"])
     dpg.configure_item("window_select", show=False)
 
 # Display window class
