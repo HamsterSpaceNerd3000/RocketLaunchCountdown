@@ -622,7 +622,7 @@ with dpg.viewport_menu_bar():
         dpg.add_menu_item(label="Spreadsheet Settings", callback=lambda: state.toggle_window("spreadsheet"))
 
 # DPG wrap up
-dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720)
+dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720, small_icon="RLCLogo.ico", large_icon="RLCLogo.ico")
 dpg.setup_dearpygui()
 dpg.show_viewport()
 apply_theme()
