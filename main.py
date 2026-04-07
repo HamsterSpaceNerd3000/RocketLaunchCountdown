@@ -176,7 +176,7 @@ class CountdownMain:
             for btn in ["start_button", "hold_button", "scrub_button", "reset_button"]:
                 dpg.configure_item(btn, height=main_h)
             
-            btn_w = (controls_width - 35) / 3
+            btn_w = (controls_width - 42) / 3
             for btn in ["btn_w_manual", "btn_r_manual", "btn_v_manual"]:
                 dpg.configure_item(btn, width=int(btn_w), height=(80 if is_touch else 40))
         
@@ -219,7 +219,21 @@ class CountdownMain:
             prefix, display_val = ch.run_countdown(self)
             dpg.set_value("prefix_text", prefix)
             dpg.set_value("countdown_text", self.format_time(display_val))
-    
+
+        # Touchscreen width check
+        is_touch = self.settings["touch_screen"]
+        side_padding = 50 if is_touch else 35
+        btn_w = (controls_width - side_padding) / 3 
+
+        # Main controls width checking
+        main_btn_w = (controls_width - 32) / 2 # For the 2-column layout (START/HOLD)
+
+        if dpg.does_item_exist("start_button"):
+            dpg.configure_item("start_button", width=int(main_btn_w))
+            dpg.configure_item("hold_button", width=int(main_btn_w))
+            dpg.configure_item("scrub_button", width=int(main_btn_w))
+            dpg.configure_item("reset_button", width=int(main_btn_w))
+
     # Function to format time
     def format_time(self, seconds):
         ts = int(seconds)
@@ -435,16 +449,19 @@ def select_display(display_type):
 # Function to open the countdown popout
 def countdown_popout():
     subprocess.Popen(["python", "popouts/countdown.py"])
+    select_display("countdown")
     dpg.configure_item("window_select", show=False)
 
 # Function to open the status popout
 def status_popout():
     subprocess.Popen(["python", "popouts/status.py"])
+    select_display("status")
     dpg.configure_item("window_select", show=False)
 
 # Function to open the concerns popout
 def concerns_popout():
     subprocess.Popen(["python", "popouts/concerns.py"])
+    select_display("concerns")
     dpg.configure_item("window_select", show=False)
 
 # Display window class
@@ -643,15 +660,15 @@ state.update()
 for key in state.statuses:
     state.update_status_gui(key, state.statuses[key])
 while dpg.is_dearpygui_running():
-    # 1. Only sync if enough time has passed
+    # Sync handler
     current_time = time.time()
     if current_time - state.last_sync_time > state.sync_interval:
-        # Check if we actually have a link before trying to sync
+        # Link check
         if state.settings.get("spreadsheet_link"):
             state.spreadsheet_refresh() 
             state.last_sync_time = current_time
 
-    # 2. These stay here because they handle the clock and GUI frames
+    # Frame handeling
     state.update()
     state.export_state()
     dpg.render_dearpygui_frame()
