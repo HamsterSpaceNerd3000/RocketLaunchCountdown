@@ -27,6 +27,7 @@ dpg.create_viewport(title="Major Concerns", width=800, height=250)
 dpg.setup_dearpygui()
 dpg.show_viewport()
 dpg.set_primary_window("main_window", True)
+dpg.set_viewport_always_top(True)
 
 def update():
     try:

@@ -85,6 +85,7 @@ def update_from_file():
 # Viewport
 dpg.create_viewport(title="Countdown Clock", width=702, height=232)
 dpg.setup_dearpygui()
+dpg.set_viewport_always_top(True)
 dpg.set_primary_window("countdown", True)
 dpg.show_viewport()
 

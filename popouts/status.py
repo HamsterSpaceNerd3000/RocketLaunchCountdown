@@ -111,6 +111,7 @@ def center_status_text():
 
 # ---------- Viewport ----------
 dpg.create_viewport(title="GO / NO-GO", width=870, height=220)
+dpg.set_viewport_always_top(True)
 dpg.setup_dearpygui()
 dpg.show_viewport()
 dpg.set_primary_window("gonogo_window", True)

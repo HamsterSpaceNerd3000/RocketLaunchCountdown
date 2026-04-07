@@ -309,7 +309,17 @@ class CountdownMain:
                     self.update_status_gui(key, idx)
 
             # Update Concerns
-            concerns = data.get("concerns", "No Data")
+            raw_concerns = data.get("concerns", "No Data")
+
+            # If there is actual data, split by comma and add bullets
+            if raw_concerns and raw_concerns != "No Data":
+                # Split by comma, strip whitespace, and filter out empty strings
+                items = [item.strip() for item in raw_concerns.split(",") if item.strip()]
+                # Join with newlines and a bullet point
+                concerns = "\n".join([f"- {item}" for item in items])
+            else:
+                concerns = "No current concerns."
+
             self.settings["manual_concerns"] = concerns
             if dpg.does_item_exist("concerns_text"):
                 dpg.set_value("concerns_text", concerns)
@@ -488,9 +498,11 @@ class DisplayWindow:
 
     # Major concerns display window
     def concerns_display(self):
-        with dpg.window(label="Major Concerns Display", tag="concerns_display", width=self.window_width, height=160, pos=[self.window_x, 380]):
+        # Increased window height from 160 to 250
+        with dpg.window(label="Major Concerns Display", tag="concerns_display", width=self.window_width, height=250, pos=[self.window_x, 380]):
             dpg.add_text("MAJOR CONCERNS: ")
-            with dpg.child_window(tag="concerns_box", width=-1, height=100):
+            # Increased child box height from 100 to 180
+            with dpg.child_window(tag="concerns_box", width=-1, height=180): 
                 c_txt = dpg.add_text(state.settings["manual_concerns"], tag="concerns_text")
                 if "status" in fonts:
                     dpg.bind_item_font(c_txt, fonts["status"])
@@ -624,6 +636,7 @@ with dpg.viewport_menu_bar():
 # DPG wrap up
 dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720, small_icon="RLCLogo.ico", large_icon="RLCLogo.ico")
 dpg.setup_dearpygui()
+dpg.set_viewport_always_top(True)
 dpg.show_viewport()
 apply_theme()
 state.update()
