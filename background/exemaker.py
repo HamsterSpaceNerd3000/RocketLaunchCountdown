@@ -8,27 +8,35 @@ import os
 class RLCBuilder(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("RLC PyInstaller Builder v2.0")
-        self.geometry("750x650")
+        self.title("RLC PyInstaller Builder v2.1")
+        self.geometry("750x750")
 
         self.script_path = tk.StringVar()
         self.exe_name = tk.StringVar(value="RocketLaunchCountdown")
-        self.hide_console = tk.BooleanVar(value=True) # Default to hidden
-        self.additional_files = []
+        self.hide_console = tk.BooleanVar(value=True)
+        self.additional_files = [] # For folders/assets
+        self.supporting_scripts = [] # For secondary .py files
 
         # --- Step 1: Main Script ---
-        step1 = tk.LabelFrame(self, text="Step 1: Main Script")
+        step1 = tk.LabelFrame(self, text="Step 1: Main Script (Entry Point)")
         step1.pack(fill="x", padx=10, pady=5)
         tk.Entry(step1, textvariable=self.script_path, width=60).pack(side="left", padx=5, pady=5)
         tk.Button(step1, text="Browse", command=self.browse_script).pack(side="left", padx=5)
 
-        # --- Step 2: Output Name ---
-        step2 = tk.LabelFrame(self, text="Step 2: Output Name")
+        # --- Step 2: Supporting Scripts ---
+        # These are scripts like path_handler.py that the main script imports
+        step2 = tk.LabelFrame(self, text="Step 2: Supporting Logic Scripts (Imported .py files)")
         step2.pack(fill="x", padx=10, pady=5)
-        tk.Entry(step2, textvariable=self.exe_name, width=60).pack(side="left", padx=5, pady=5)
+        self.scripts_listbox = tk.Listbox(step2, height=3)
+        self.scripts_listbox.pack(side="left", fill="x", expand=True, padx=5, pady=5)
+        
+        s_btn_frame = tk.Frame(step2)
+        s_btn_frame.pack(side="right")
+        tk.Button(s_btn_frame, text="Add Script", command=self.add_script).pack(fill="x", padx=5)
+        tk.Button(s_btn_frame, text="Clear", command=self.clear_scripts).pack(fill="x", padx=5)
 
-        # --- Step 3: Include Popouts/Assets ---
-        step3 = tk.LabelFrame(self, text="Step 3: Include Folders (e.g., Popouts)")
+        # --- Step 3: Include Folders ---
+        step3 = tk.LabelFrame(self, text="Step 3: Include External Folders (Popouts, Database)")
         step3.pack(fill="x", padx=10, pady=5)
         self.files_listbox = tk.Listbox(step3, height=3)
         self.files_listbox.pack(side="left", fill="x", expand=True, padx=5, pady=5)
@@ -36,18 +44,18 @@ class RLCBuilder(tk.Tk):
         btn_frame = tk.Frame(step3)
         btn_frame.pack(side="right")
         tk.Button(btn_frame, text="Add Folder", command=self.add_folder).pack(fill="x", padx=5)
-        tk.Button(btn_frame, text="Clear", command=self.clear_files).pack(fill="x", padx=5)
+        tk.Button(btn_frame, text="Clear", command=self.clear_folders).pack(fill="x", padx=5)
 
         # --- Step 4: Options ---
         step4 = tk.LabelFrame(self, text="Step 4: Build Options")
         step4.pack(fill="x", padx=10, pady=5)
-        tk.Checkbutton(step4, text="Hide Console Window (--noconsole)", 
+        tk.Entry(step4, textvariable=self.exe_name, width=30).pack(side="left", padx=5, pady=5)
+        tk.Checkbutton(step4, text="Hide Console Window", 
                        variable=self.hide_console).pack(side="left", padx=5, pady=5)
 
         tk.Button(self, text="BUILD ONE-FILE EXE", bg="#2e7d32", fg="white", font=("Arial", 10, "bold"),
                   command=self.start_build).pack(pady=10)
 
-        # Log window
         self.log = scrolledtext.ScrolledText(self, height=12, bg="#1e1e1e", fg="#d4d4d4")
         self.log.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -55,14 +63,25 @@ class RLCBuilder(tk.Tk):
         path = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
         if path: self.script_path.set(path)
 
+    def add_script(self):
+        path = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
+        if path:
+            self.supporting_scripts.append(path)
+            self.scripts_listbox.insert(tk.END, os.path.basename(path))
+
+    def clear_scripts(self):
+        self.supporting_scripts.clear()
+        self.scripts_listbox.delete(0, tk.END)
+
     def add_folder(self):
         path = filedialog.askdirectory(title="Select Folder to Bundle")
         if path:
             folder_name = os.path.basename(path)
+            # Use a dot for the destination to keep it relative to root
             self.additional_files.append(f"{path}{os.pathsep}{folder_name}")
             self.files_listbox.insert(tk.END, f"Folder: {folder_name}")
 
-    def clear_files(self):
+    def clear_folders(self):
         self.additional_files.clear()
         self.files_listbox.delete(0, tk.END)
 
@@ -75,14 +94,12 @@ class RLCBuilder(tk.Tk):
         if not script or not os.path.isfile(script):
             messagebox.showerror("Error", "Please select your main RLC script.")
             return
-
         self.log.delete("1.0", tk.END)
         threading.Thread(target=self.build_exe, args=(script,), daemon=True).start()
 
     def build_exe(self, script):
         output_dir = os.path.join(os.path.dirname(script), "dist")
         
-        # Base Command
         cmd = [
             sys.executable, "-m", "PyInstaller",
             "--onefile",
@@ -90,13 +107,19 @@ class RLCBuilder(tk.Tk):
             "--distpath", output_dir,
         ]
 
-        # Handle Console Toggle
+        # Handle Console
         if self.hide_console.get():
             cmd.append("--noconsole")
         else:
             cmd.append("--console")
 
-        # Add additional folders
+        # Add logic scripts via search paths
+        for s in self.supporting_scripts:
+            # We add the directory of the supporting script to the search path
+            script_dir = os.path.dirname(s)
+            cmd.extend(["--paths", script_dir])
+
+        # Add asset/popout folders
         for item in self.additional_files:
             cmd.extend(["--add-data", item])
 

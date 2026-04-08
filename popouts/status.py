@@ -5,16 +5,21 @@ import dearpygui.dearpygui as dpg
 import json
 import os
 
+import popout_init
+popout_init.bootstrap()
+
+import path_handler as ph
+
 # ---------- File Path ----------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATE_FILE = os.path.join(BASE_DIR, "countdown_state.json")
 
 dpg.create_context()
 
 fonts = {}
 with dpg.font_registry():
+    root = ph.PATH
     try:
-        font_p = "C:/Windows/Fonts/consola.ttf"
+        font_p = root / "database" / "ShareTechMono-Regular.ttf"
         fonts["status"] = dpg.add_font(font_p, 60)
     except:
         pass
@@ -68,12 +73,14 @@ def apply_popout_theme(data):
     except Exception as e:
         pass
 
+state_path = ph.PATH / "database" / "countdown_state.json"
+
 def update_from_file():
-    if not os.path.exists(STATE_FILE):
+    if not os.path.exists(state_path):
         return
 
     try:
-        with open(STATE_FILE, "r") as f:
+        with open(state_path, "r") as f:
             data = json.load(f)
 
         # 1. Update the Theme first

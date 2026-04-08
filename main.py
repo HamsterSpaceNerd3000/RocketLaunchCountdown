@@ -2,15 +2,18 @@
 
 # Imports
 import dearpygui.dearpygui as dpg
+import os
 import settings
 from datetime import datetime, timedelta
 import countdown_handler as ch
+import path_handler as ph
 import subprocess
 import time
 import json
 import spreadsheet_handler as sh
 import threading
 import re
+import sys
 
 # DPG init
 dpg.create_context()
@@ -275,8 +278,15 @@ class CountdownMain:
 
         }
 
-        with open("countdown_state.json", "w") as f:
+        # JSON dump logic
+        db_folder = ph.PATH / "database"
+        final_path = db_folder / "countdown_state.json"
+        temp_path = db_folder / "countdown_state_temp.json"
+
+        with open(temp_path, "w") as f:
             json.dump(data, f)
+
+        os.replace(temp_path, final_path)
     
     # Refresh data from spreadsheet
     def spreadsheet_refresh(self):
@@ -381,9 +391,13 @@ state = CountdownMain()
 
 # Font handling
 fonts = {}
+
+# Grab script root
+root = ph.PATH
+
 with dpg.font_registry():
     try:
-        font_p = "C:/Windows/Fonts/consola.ttf"
+        font_p = root / "database" / "ShareTechMono-Regular.ttf"
         # Create your sizes
         fonts["huge"] = dpg.add_font(font_p, 120)
         fonts["large"] = dpg.add_font(font_p, 60)
@@ -392,7 +406,10 @@ with dpg.font_registry():
         
         # This one line makes EVERYTHING use this font by default
         dpg.bind_font(fonts["default"]) 
-    except:
+    except Exception as e:
+        print(f"EXACT PATH: {os.path.abspath(font_p)}")
+        # This prints the REAL reason it's failing
+        print(f"Font Load Failed with error: {e}")
         pass
 
 box_theme = None
@@ -448,19 +465,31 @@ def select_display(display_type):
 
 # Function to open the countdown popout
 def countdown_popout():
-    subprocess.Popen(["python", "popouts/countdown.py"])
+    if getattr(sys, 'frozen', False):
+        popout_bin = ph.PATH / "countdown" 
+        subprocess.Popen([str(popout_bin)], cwd=str(ph.PATH), env=os.environ)
+    else:
+        subprocess.Popen([sys.executable, "popouts/countdown.py"])
     select_display("countdown")
     dpg.configure_item("window_select", show=False)
 
 # Function to open the status popout
 def status_popout():
-    subprocess.Popen(["python", "popouts/status.py"])
+    if getattr(sys, 'frozen', False):
+        popout_bin = ph.PATH / "status" 
+        subprocess.Popen([str(popout_bin)], cwd=str(ph.PATH), env=os.environ)
+    else:
+        subprocess.Popen([sys.executable, "popouts/status.py"])
     select_display("status")
     dpg.configure_item("window_select", show=False)
 
 # Function to open the concerns popout
 def concerns_popout():
-    subprocess.Popen(["python", "popouts/concerns.py"])
+    if getattr(sys, 'frozen', False):
+        popout_bin = ph.PATH / "concerns"
+        subprocess.Popen([str(popout_bin)], cwd=str(ph.PATH), env=os.environ)
+    else:
+        subprocess.Popen([sys.executable, "popouts/concerns.py"])
     select_display("concerns")
     dpg.configure_item("window_select", show=False)
 

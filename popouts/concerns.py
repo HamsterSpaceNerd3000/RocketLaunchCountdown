@@ -5,12 +5,18 @@ import dearpygui.dearpygui as dpg
 import json
 import os
 
+import popout_init
+popout_init.bootstrap()
+
+import path_handler as ph
+
 dpg.create_context()
 
 fonts = {}
 with dpg.font_registry():
+    root = ph.PATH
     try:
-        font_p = "C:/Windows/Fonts/consola.ttf"
+        font_p = root / "database" / "ShareTechMono-Regular.ttf"
         fonts["status"] = dpg.add_font(font_p, 40)
     except:
         pass

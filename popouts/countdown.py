@@ -5,12 +5,18 @@ import dearpygui.dearpygui as dpg
 import json
 import os
 
+import popout_init
+popout_init.bootstrap()
+
+import path_handler as ph
+
 dpg.create_context()
 
 fonts = {}
 with dpg.font_registry():
+    root = ph.PATH
     try:
-        font_p = "C:/Windows/Fonts/consola.ttf"
+        font_p = root / "database" / "ShareTechMono-Regular.ttf"
         fonts["huge"] = dpg.add_font(font_p, 120)
         fonts["large"] = dpg.add_font(font_p, 60)
     except:
@@ -34,14 +40,15 @@ with dpg.window(
             dpg.bind_item_font("prefix_text", fonts["huge"])
             dpg.bind_item_font("countdown_text", fonts["huge"])
 
+state_path = ph.PATH / "database" / "countdown_state.json"
 
 # Sync from main
 def update_from_file():
-    if not os.path.exists("countdown_state.json"):
+    if not os.path.exists(state_path):
         return
 
     try:
-        with open("countdown_state.json", "r") as f:
+        with open(state_path, "r") as f:
             data = json.load(f)
 
         dpg.set_value("mission_title", data["mission_name"])
