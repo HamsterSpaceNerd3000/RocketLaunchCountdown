@@ -281,12 +281,10 @@ class CountdownMain:
         # JSON dump logic
         db_folder = ph.PATH / "database"
         final_path = db_folder / "countdown_state.json"
-        temp_path = db_folder / "countdown_state_temp.json"
 
-        with open(temp_path, "w") as f:
+        with open(final_path, "w") as f:
             json.dump(data, f)
 
-        os.replace(temp_path, final_path)
     
     # Refresh data from spreadsheet
     def spreadsheet_refresh(self):

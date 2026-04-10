@@ -37,8 +37,8 @@ dpg.set_viewport_always_top(True)
 
 def update():
     try:
-        path = os.path.join(os.path.dirname(__file__), "..", "countdown_state.json")
-        with open(path, "r") as f:
+        state_path = ph.PATH / "database" / "countdown_state.json"
+        with open(state_path, "r") as f:
             data = json.load(f)
 
         dpg.set_value("concerns_text", data.get("manual_concerns", ""))
