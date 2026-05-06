@@ -91,8 +91,27 @@ def update_from_file():
             for key, info in data["statuses"].items():
                 status_tag = f"{key}_status"
                 if dpg.does_item_exist(status_tag):
-                    dpg.set_value(status_tag, info["label"])
-                    dpg.configure_item(status_tag, color=tuple(info["color"]))
+                    if key == "WEATHER" and "status_values" in data:
+                        weather_value = data["status_values"].get("WEATHER", info["label"])
+                        dpg.set_value(status_tag, weather_value)
+
+                        try:
+                            if "%" in weather_value:
+                                percent = int(weather_value.replace("%", ""))
+                                if percent >= 60:
+                                    color = (0, 255, 0)
+                                elif 45 <= percent < 60:
+                                    color = (255, 165, 0)
+                                else:
+                                    color = (255, 0, 0)
+                                dpg.configure_item(status_tag, color=color)
+                            else:
+                                dpg.configure_item(status_tag, color=tuple(info["color"]))
+                        except ValueError:
+                            dpg.configure_item(status_tag, color=tuple(info["color"]))
+                    else:
+                        dpg.set_value(status_tag, info["label"])
+                        dpg.configure_item(status_tag, color=tuple(info["color"]))
     except:
         pass
 

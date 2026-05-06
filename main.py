@@ -33,6 +33,7 @@ class CountdownMain:
         self.hold_start_time = None
 
         self.statuses = {"WEATHER": 0, "RANGE": 0, "VEHICLE": 0}
+        self.status_values = {"WEATHER": "N/A", "RANGE": "N/A", "VEHICLE": "N/A"}
         self.auto_hold = False
 
         self.settings = settings.defaults
@@ -270,6 +271,7 @@ class CountdownMain:
             "hold": self.hold,
             "countdown_color": color,
             "statuses": status_data,
+            "status_values": self.status_values,
             "manual_concerns": self.settings["manual_concerns"],
 
             "box_bg_color": self.settings["box_bg_color"],
@@ -300,6 +302,7 @@ class CountdownMain:
             
             for key in ["WEATHER", "RANGE", "VEHICLE"]:
                 raw_val = str(data.get(key.lower(), "N/A")).strip().upper()
+                self.status_values[key] = raw_val
                 
                 if key == "WEATHER" and "%" in raw_val:
                     try:
@@ -626,7 +629,7 @@ with dpg.window(label="Spreadsheet Manager", tag="spreadsheet", width=420, heigh
     dpg.add_input_text(default_value=state.settings["vehicle_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"vehicle_sheet_cell": a})))
     dpg.add_text("Concerns Cell")
     dpg.add_input_text(default_value=state.settings["concerns_sheet_cell"], width=-1, callback=lambda s, a: (state.settings.update({"concerns_sheet_cell": a})))
-    dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save(state.settings))
+    dpg.add_button(label="SAVE", width=-1, height=30, callback=lambda: settings.save(state.settings))
 
 
 # Settings window
@@ -636,7 +639,7 @@ with dpg.window(label="Settings", tag="SettingsWin", width=415, height=300, pos=
    dpg.add_color_edit(label="Box Outline Color", default_value=state.settings["box_outline"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"box_outline": a[:3]}), apply_theme()))
    dpg.add_color_edit(label="Text Color", default_value=state.settings["txt_color"], no_alpha=True, alpha_bar=False, callback=lambda s, a: (state.settings.update({"txt_color": a[:3]}), apply_theme()))
    dpg.add_button(label="SPREADSHEET", width=-1, height=30, callback=lambda: state.toggle_window("spreadsheet"))
-   dpg.add_button(label="SAVE", width=-1, height=30, callback=settings.save(state.settings))
+   dpg.add_button(label="SAVE", width=-1, height=30, callback=lambda: settings.save(state.settings))
    dpg.add_button(label="RESET TO DEFAULTS", width=-1, height=30, callback=state.reset_settings)
 
 console_logs = []

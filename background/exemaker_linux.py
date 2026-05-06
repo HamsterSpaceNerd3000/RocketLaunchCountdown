@@ -64,8 +64,8 @@ class RLCBuilder(tk.Tk):
         if path: self.script_path.set(path)
 
     def add_script(self):
-        path = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
-        if path:
+        paths = filedialog.askopenfilenames(filetypes=[("Python files", "*.py")])
+        for path in paths:
             self.supporting_scripts.append(path)
             self.scripts_listbox.insert(tk.END, os.path.basename(path))
 
@@ -101,7 +101,7 @@ class RLCBuilder(tk.Tk):
         output_dir = os.path.join(os.path.dirname(script), "dist")
         
         cmd = [
-            sys.executable, "-m", "PyInstaller",
+            "pyinstaller",
             "--onefile",
             "--name", self.exe_name.get(),
             "--distpath", output_dir,

@@ -2,8 +2,8 @@
 
 
 a = Analysis(
-    ['main.py', 'settings.py', 'spreadsheet_handler.py', 'errors.py', 'countdown_handler.py'],
-    pathex=[],
+    ['C:/Users/forjn/Documents/GitHub/OpenCountdown/main.py'],
+    pathex=['C:/Users/forjn/Documents/GitHub/OpenCountdown', 'C:/Users/forjn/Documents/GitHub/OpenCountdown', 'C:/Users/forjn/Documents/GitHub/OpenCountdown', 'C:/Users/forjn/Documents/GitHub/OpenCountdown', 'C:/Users/forjn/Documents/GitHub/OpenCountdown'],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -29,7 +29,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
