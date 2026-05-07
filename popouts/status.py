@@ -73,7 +73,7 @@ def apply_popout_theme(data):
     except Exception as e:
         pass
 
-state_path = ph.PATH / "database" / "countdown_state.json"
+state_path = ph.get_config_folder() / "countdown_state.json"
 
 def update_from_file():
     if not os.path.exists(state_path):

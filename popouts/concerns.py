@@ -37,7 +37,7 @@ dpg.set_viewport_always_top(True)
 
 def update():
     try:
-        state_path = ph.PATH / "database" / "countdown_state.json"
+        state_path = ph.get_config_folder() / "countdown_state.json"
         with open(state_path, "r") as f:
             data = json.load(f)
 

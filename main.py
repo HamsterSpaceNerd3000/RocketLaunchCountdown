@@ -281,7 +281,7 @@ class CountdownMain:
         }
 
         # JSON dump logic
-        db_folder = ph.PATH / "database"
+        db_folder = ph.get_config_folder()  # Instead of: ph.PATH / "database"
         final_path = db_folder / "countdown_state.json"
 
         with open(final_path, "w") as f:
@@ -681,7 +681,8 @@ with dpg.viewport_menu_bar():
         dpg.add_menu_item(label="Spreadsheet Settings", callback=lambda: state.toggle_window("spreadsheet"))
 
 # DPG wrap up
-dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720, small_icon="RLCLogo.ico", large_icon="RLCLogo.ico")
+icon_path = str(root / "database" / "RLCLogo.ico")
+dpg.create_viewport(title=f"RocketLaunchCountdown v{version}", width=1231, height=720, small_icon=icon_path, large_icon=icon_path)
 dpg.setup_dearpygui()
 dpg.set_viewport_always_top(True)
 dpg.show_viewport()

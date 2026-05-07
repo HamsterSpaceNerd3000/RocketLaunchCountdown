@@ -40,7 +40,7 @@ with dpg.window(
             dpg.bind_item_font("prefix_text", fonts["huge"])
             dpg.bind_item_font("countdown_text", fonts["huge"])
 
-state_path = ph.PATH / "database" / "countdown_state.json"
+state_path = ph.get_config_folder() / "countdown_state.json"
 
 # Sync from main
 def update_from_file():

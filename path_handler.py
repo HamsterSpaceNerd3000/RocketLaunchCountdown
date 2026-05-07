@@ -14,3 +14,9 @@ def get_root():
     
 # Establish path
 PATH = get_root()
+
+def get_config_folder():
+    """Get the RocketLaunchCountdown folder in Documents"""
+    documents = Path.home() / "Documents" / "RocketLaunchCountdown"
+    documents.mkdir(parents=True, exist_ok=True)
+    return documents

@@ -3,8 +3,9 @@
 # Imports
 import os
 import json
+from path_handler import get_config_folder
 
-config_file = "config.json"
+config_file = get_config_folder() / "config.json"
 
 # Default settings
 defaults = {
