@@ -14,6 +14,7 @@ class RLCBuilder(tk.Tk):
         self.script_path = tk.StringVar()
         self.exe_name = tk.StringVar(value="RocketLaunchCountdown")
         self.hide_console = tk.BooleanVar(value=True)
+        self.icon_path = tk.StringVar()
         self.additional_files = [] # For folders/assets
         self.supporting_scripts = [] # For secondary .py files
 
@@ -53,6 +54,13 @@ class RLCBuilder(tk.Tk):
         tk.Checkbutton(step4, text="Hide Console Window", 
                        variable=self.hide_console).pack(side="left", padx=5, pady=5)
 
+        # --- Step 5: Icon ---
+        step5 = tk.LabelFrame(self, text="Step 5: EXE Icon (Optional, .ico)")
+        step5.pack(fill="x", padx=10, pady=5)
+        tk.Entry(step5, textvariable=self.icon_path, width=60).pack(side="left", padx=5, pady=5)
+        tk.Button(step5, text="Browse", command=self.browse_icon).pack(side="left", padx=5)
+        tk.Button(step5, text="Clear", command=lambda: self.icon_path.set("")).pack(side="left", padx=5)
+
         tk.Button(self, text="BUILD ONE-FILE EXE", bg="#2e7d32", fg="white", font=("Arial", 10, "bold"),
                   command=self.start_build).pack(pady=10)
 
@@ -62,6 +70,10 @@ class RLCBuilder(tk.Tk):
     def browse_script(self):
         path = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
         if path: self.script_path.set(path)
+
+    def browse_icon(self):
+        path = filedialog.askopenfilename(title="Select Icon", filetypes=[("Icon files", "*.ico"), ("All files", "*.*")])
+        if path: self.icon_path.set(path)
 
     def add_script(self):
         paths = filedialog.askopenfilenames(filetypes=[("Python files", "*.py")])
@@ -115,6 +127,11 @@ class RLCBuilder(tk.Tk):
             cmd.append("--noconsole")
         else:
             cmd.append("--console")
+
+        # Handle Icon
+        icon = self.icon_path.get()
+        if icon:
+            cmd.extend(["--icon", icon])
 
         # Add logic scripts via search paths
         for s in self.supporting_scripts:
